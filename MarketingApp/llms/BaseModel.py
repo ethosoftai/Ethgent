@@ -17,6 +17,7 @@ import speech_recognition as sr
 from openai import AsyncOpenAI, RateLimitError
 
 from .SubModels import SubModelRateLimitError, get_all_submodels
+from MarketingApp.environments.approval_runtime import register_approval_handler
 from .runtime_config import (
     get_base_model_name,
     get_base_reasoning_effort,
@@ -104,6 +105,16 @@ class BaseModel:
         self._runtime_tool_map = {}
 
         self._configure_agent_runtime()
+
+        # araclar/ icindeki duz fonksiyonlarin (worker_video_yayinla gibi) onay
+        # isteyebilmesi icin: self.request_approval'i HER cagride yeniden okuyan
+        # dinamik bir kapanis kaydet -- boylece TerminalManager'in
+        # base_model.request_approval'i degistirmesi otomatik yansir (bkz.
+        # environments/approval_runtime.py).
+        async def _dynamic_approval_handler(action_id: str, description: str) -> bool:
+            return await self.request_approval(action_id, description)
+
+        register_approval_handler(_dynamic_approval_handler)
 
         print(f"🧠 BaseModel başlatıldı: {self.model}")
         print(f"   Sağlayıcı: {self.provider_name}")

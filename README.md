@@ -407,6 +407,17 @@ print(result.text)
 
 </details>
 
+## Approval for tools that change something outside
+
+A tool that does something irreversible (publishing, sending) asks the approval gate before it acts, with `await request_tool_approval(action_id, description)` from `MarketingApp.environments.approval_runtime`. The answer never comes from the model:
+
+- **At the terminal** the person is asked (`Onayliyor musun? [e/H]`); only `e`, `evet`, `y` or `yes` approves.
+- **Embedded (`EthgentAgent`)** the gate refuses everything unless you pass your own `approval_handler=` (an `async` function taking `(action_id, description)` and returning a bool).
+- **With no handler registered at all** it refuses.
+- A host that queues jobs can approve per job: wrap the run in `with job_approvals([...tool names...])` and register `approve_if_granted_by_job`. Only the tools the job names are approved, for the length of that job.
+
+Workflows exported by the workflow factory with a step that writes outside the machine use this gate, so they run here only if one of the above approves them.
+
 ## Project Structure
 
 <details>

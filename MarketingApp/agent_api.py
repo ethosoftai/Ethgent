@@ -40,7 +40,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 
 class AgentConfigurationError(RuntimeError):
@@ -97,6 +97,7 @@ class EthgentAgent:
         config_dir: str | None = None,
         model: str | None = None,
         api_key: str | None = None,
+        approval_handler: Callable[[str, str], Awaitable[bool]] | None = None,
     ):
         _apply_path_override("ETHGENT_WORKSPACE_DIR", workspace_dir)
         _apply_path_override("ETHGENT_CONFIG_DIR", config_dir)
@@ -105,10 +106,23 @@ class EthgentAgent:
         # override'lari uygulandiktan SONRA import edilir.
         from MarketingApp.llms import BaseModel as _BaseModel
         from MarketingApp.paths import CONFIG_DIR, WORKSPACE_DIR
+        from MarketingApp.environments.approval_runtime import (
+            reject_all_approvals,
+            register_approval_handler,
+        )
 
         self.workspace_dir = str(WORKSPACE_DIR)
         self.config_dir = str(CONFIG_DIR)
         self._base_model = _BaseModel(api_key=api_key, model=model)
+
+        # BaseModel.__init__ kendi (insan onayi bekleyen, 300sn timeout'lu)
+        # varsayilan handler'ini zaten kaydetti -- ama EthgentAgent tanim geregi
+        # bassiz (headless) bir baglamdir, onaylayacak kimse yok. Cagiran taraf
+        # kendi approval_handler'ini vermezse, gereksiz 300sn beklemek yerine
+        # aninda ve acikca reddet (fail-closed). Cagiran taraf ileride kendi
+        # onay akisini (orn. bir dashboard'a callback) baglamak isterse
+        # approval_handler parametresiyle bunu degistirebilir.
+        register_approval_handler(approval_handler or reject_all_approvals)
 
     async def run(self, task: str, *, context: str = "") -> AgentResult:
         """Bir gorevi calistirir ve yapilandirilmis sonucu dondurur.
