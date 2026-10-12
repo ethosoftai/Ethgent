@@ -45,8 +45,8 @@ It can also be embedded as a library in another Python process ([see below](#usi
 **You need:** Python 3.11+, and Chrome plus an active X (Twitter) session in a Chrome profile if you want the social features.
 
 ```bash
-git clone https://github.com/Ahmet2001/BrowserAgent.git
-cd BrowserAgent
+git clone https://github.com/ethosoftai/Ethgent.git
+cd Ethgent
 chmod +x run.sh
 ./run.sh
 ```
