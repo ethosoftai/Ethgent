@@ -20,6 +20,11 @@
   <a href="#testing">Testing</a>
 </p>
 
+<p align="center">
+  Video: <a href="public/ethgent-intro.mp4">English, narrated</a> · <a href="public/ethgent-intro-silent.mp4">silent</a> · <a href="public/ethgent-intro-tr.mp4">Türkçe</a> ·
+  Paper: <a href="https://ethosoft.org/papers/Ethgent/">ethosoft.org/papers/Ethgent</a>
+</p>
+
 ---
 
 ## What it is
