@@ -49,6 +49,32 @@ def _apply_limits(limits: dict) -> None:
         resource.setrlimit(resource.RLIMIT_FSIZE, (size, size))
 
 
+def _install_approval_stub(approved: bool) -> None:
+    """Gives tool code that asks the agent's approval gate the host's answer for this call.
+
+    Inside the sandbox the agent app is not importable. A tool exported by the workflow factory
+    imports ``MarketingApp.environments.approval_runtime.request_tool_approval`` and refuses if it
+    cannot. The host asks the person before it sends an approved call here, so the stub answers with
+    that decision; it cannot approve anything the host did not.
+    """
+    names = ("MarketingApp", "MarketingApp.environments", "MarketingApp.environments.approval_runtime")
+    if any(name in sys.modules for name in names):
+        return
+    root = types.ModuleType(names[0])
+    env = types.ModuleType(names[1])
+    gate = types.ModuleType(names[2])
+
+    async def request_tool_approval(action_id, description):  # noqa: ARG001
+        return bool(approved)
+
+    gate.request_tool_approval = request_tool_approval
+    root.environments = env
+    env.approval_runtime = gate
+    root.__path__ = []  # a package, so the submodule import resolves
+    env.__path__ = []
+    sys.modules.update({names[0]: root, names[1]: env, names[2]: gate})
+
+
 def _emit(payload: dict, out) -> None:
     out.write(MARKER + json.dumps(payload, ensure_ascii=False, default=str) + "\n")
     out.flush()
@@ -65,6 +91,7 @@ def main() -> int:
     sys.stdout = sys.stderr  # tool output must not reach the result channel
     try:
         _apply_limits(request.get("limits") or {})
+        _install_approval_stub(bool(request.get("approved")))
         for path in request.get("paths") or []:
             if path not in sys.path:
                 sys.path.append(path)

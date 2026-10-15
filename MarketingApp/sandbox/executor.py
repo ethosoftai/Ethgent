@@ -174,9 +174,14 @@ def run_tool(
     env_values: dict[str, str] | None = None,
     *,
     positional: list[Any] | None = None,
+    approved: bool = False,
     conf: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Run ``function`` from ``tool_file`` in the sandbox. Never raises for a tool failure."""
+    """Run ``function`` from ``tool_file`` in the sandbox. Never raises for a tool failure.
+
+    ``approved`` tells the sandbox that the host already approved this call; a tool whose own code
+    asks the approval gate then gets that answer (and ``False`` otherwise).
+    """
     conf = conf or settings()
     mode = resolve_mode(conf)
     tool_file = Path(tool_file)
@@ -194,7 +199,7 @@ def run_tool(
     if mode == "container":
         name = f"ethgent-sbx-{uuid.uuid4().hex[:12]}"
         cmd, inner_paths = _container_command(conf, name, tool_file, env)
-        request = {"file": f"/tool/{tool_file.name}", "function": function, "args": args, "positional": positional or [], "paths": inner_paths, "limits": limits}
+        request = {"file": f"/tool/{tool_file.name}", "function": function, "args": args, "positional": positional or [], "approved": bool(approved), "paths": inner_paths, "limits": limits}
         client_env = {**os.environ, **env}
         try:
             proc = subprocess.run(
@@ -213,7 +218,7 @@ def run_tool(
             subprocess.run(["docker", "wait", name], capture_output=True, timeout=20)
             stdout, stderr, code, timed_out = str(exc.stdout or ""), str(exc.stderr or ""), -9, True
     else:
-        request = {"file": str(tool_file.resolve()), "function": function, "args": args, "positional": positional or [], "paths": _dependency_paths(), "limits": limits}
+        request = {"file": str(tool_file.resolve()), "function": function, "args": args, "positional": positional or [], "approved": bool(approved), "paths": _dependency_paths(), "limits": limits}
         base_env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "LANG": "C.UTF-8",

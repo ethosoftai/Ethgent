@@ -74,27 +74,55 @@ def make_sandboxed_tool(
     env_names: list[str] | None = None,
     env_values: Callable[[], dict[str, str]] | None = None,
     description: str = "",
+    requires_approval: bool = False,
 ) -> Callable[..., Any]:
-    """A function with the tool's name, docstring and signature that runs it in the sandbox."""
+    """A function with the tool's name, docstring and signature that runs it in the sandbox.
+
+    With ``requires_approval`` the function is async and asks the host's approval gate before it
+    sends anything to the sandbox; without an approval nothing runs.
+    """
     path = Path(path)
     signature, doc = read_signature(path.read_text(encoding="utf-8"), name)
     declared = list(env_names or [])
 
-    def sandboxed_tool(*args: Any, **kwargs: Any) -> Any:
-        try:
-            bound = signature.bind(*args, **kwargs)
-        except TypeError as exc:
-            return f"[Sandbox hata]: {exc}"
+    def run(bound: inspect.BoundArguments, approved: bool) -> Any:
         values = env_values() if env_values else {}
         try:
-            outcome = executor.run_tool(path, name, dict(bound.kwargs), declared, values, positional=list(bound.args))
+            outcome = executor.run_tool(
+                path, name, dict(bound.kwargs), declared, values, positional=list(bound.args), approved=approved
+            )
         except executor.SandboxError as exc:
             return f"[Sandbox hata]: {exc}"
         return format_result(outcome)
+
+    if requires_approval:
+
+        async def sandboxed_tool(*args: Any, **kwargs: Any) -> Any:
+            import asyncio
+
+            from MarketingApp.environments.approval_runtime import describe_call, request_tool_approval
+
+            try:
+                bound = signature.bind(*args, **kwargs)
+            except TypeError as exc:
+                return f"[Sandbox hata]: {exc}"
+            if not await request_tool_approval(name, describe_call(name, description, dict(bound.arguments))):
+                return f"[Onay yok]: {name} onaylanmadi, calistirilmadi."
+            return await asyncio.to_thread(run, bound, True)
+
+    else:
+
+        def sandboxed_tool(*args: Any, **kwargs: Any) -> Any:
+            try:
+                bound = signature.bind(*args, **kwargs)
+            except TypeError as exc:
+                return f"[Sandbox hata]: {exc}"
+            return run(bound, False)
 
     sandboxed_tool.__name__ = name
     sandboxed_tool.__qualname__ = name
     sandboxed_tool.__doc__ = doc or description
     sandboxed_tool.__signature__ = signature  # type: ignore[attr-defined]
     sandboxed_tool.ethgent_sandboxed = True  # type: ignore[attr-defined]
+    sandboxed_tool.ethgent_requires_approval = requires_approval  # type: ignore[attr-defined]
     return sandboxed_tool

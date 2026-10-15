@@ -96,3 +96,49 @@ async def approve_if_granted_by_job(action_id: str, description: str) -> bool:
         print(f"✅ [Approval] Is baslatan tarafindan onaylanmisti: {action_id}")
         return True
     return await reject_all_approvals(action_id, description)
+
+
+# ---------------------------------------------------------------- onay: pack'in beyan ettigi tool'lar
+#
+# Bir pack, plugin.yaml'da bir tool'u `requires_approval: true` diye isaretleyebilir. O zaman onayi
+# tool'un kendi kodu degil, ajan (host) sorar: tool calismadan once, bu modulun kayitli isleyicisine.
+# Boylece onay, tool'un iyi niyetine bagli kalmaz.
+
+APPROVAL_DESCRIPTION_LIMIT = 400
+
+
+def describe_call(name: str, description: str, args: dict) -> str:
+    """Onay isteginde insana gosterilecek tek satir: hangi tool, ne yapar, hangi argumanlarla."""
+    import json
+
+    try:
+        rendered = json.dumps(args, ensure_ascii=False, default=str)
+    except Exception:
+        rendered = str(args)
+    text = f"{name}: {description or 'pack tool'} | argumanlar: {rendered}"
+    return text[:APPROVAL_DESCRIPTION_LIMIT]
+
+
+def gate_tool(func, name: str, description: str = ""):
+    """``func``'i, calismadan once onay isteyen async bir sarmalayiciya cevirir (imzasi korunur)."""
+    import asyncio
+    import functools
+    import inspect
+
+    signature = inspect.signature(func)
+
+    @functools.wraps(func)
+    async def gated(*args, **kwargs):
+        try:
+            bound = signature.bind(*args, **kwargs)
+        except TypeError as exc:
+            return f"[Hata]: {exc}"
+        if not await request_tool_approval(name, describe_call(name, description, dict(bound.arguments))):
+            return f"[Onay yok]: {name} onaylanmadi, calistirilmadi."
+        if inspect.iscoroutinefunction(func):
+            return await func(*bound.args, **bound.kwargs)
+        return await asyncio.to_thread(func, *bound.args, **bound.kwargs)
+
+    gated.__signature__ = signature  # type: ignore[attr-defined]
+    gated.ethgent_requires_approval = True  # type: ignore[attr-defined]
+    return gated

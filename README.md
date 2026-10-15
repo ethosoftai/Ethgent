@@ -340,6 +340,8 @@ In both modes the tool sees **only the environment variables it declared**, neve
 | `ETHGENT_SANDBOX_NETWORK` | `bridge` | `none` cuts the network (container mode) |
 | `ETHGENT_SANDBOX_IMAGE` | `python:<your version>-slim` | Image for container mode |
 
+A tool the pack marks `requires_approval: true` is not sent to the sandbox until the host approves it; see [Approval](#approval-for-tools-that-change-something-outside).
+
 `/agent pack install <src> --trust` installs a pack's tools in the agent's process instead, with access to everything the agent can reach; use it only for packs you wrote or reviewed. `/tool show <name>` tells you where a tool runs.
 
 > [!NOTE]
@@ -416,7 +418,20 @@ A tool that does something irreversible (publishing, sending) asks the approval 
 - **With no handler registered at all** it refuses.
 - A host that queues jobs can approve per job: wrap the run in `with job_approvals([...tool names...])` and register `approve_if_granted_by_job`. Only the tools the job names are approved, for the length of that job.
 
-Workflows exported by the workflow factory with a step that writes outside the machine use this gate, so they run here only if one of the above approves them.
+### Tools from packs declare it; the agent asks
+
+A pack marks a tool that changes something outside with `requires_approval: true` in its `plugin.yaml`:
+
+```yaml
+tools:
+  - name: send_payment
+    file: tools/payments.py
+    requires_approval: true
+```
+
+For such a tool the agent itself asks the gate above **before** the tool runs, showing the tool name and its arguments. Without an approval the call is refused and nothing is sent to the [sandbox](#sandbox-for-installed-packs); a tool installed with `--trust` is gated the same way in the agent's process. The approval does not depend on the tool's own code, which may not ask at all. In a queued job the action id is the tool name, so `job_approvals(["send_payment"])` approves exactly that tool. `/agent pack preview` and `/tool show` say which tools ask, and `/agent pack export` keeps the declaration.
+
+Workflows exported by the workflow factory with a step that writes outside the machine set `requires_approval: true` and also ask the gate from their own code. Inside the sandbox that inner question gets the agent's answer for that call, so they run only if one of the above approves them.
 
 ## Project Structure
 

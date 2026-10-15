@@ -825,7 +825,8 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
         self._emit(f"  Tool'lar ({len(preview['tools'])}):")
         for tool in preview["tools"]:
             state = "OK " if tool.get("export_ok") else "HATA"
-            self._emit(f"    [{state}] {tool['name']}")
+            gate = " (calismadan once onay ister)" if tool.get("requires_approval") else ""
+            self._emit(f"    [{state}] {tool['name']}{gate}")
         for warning in preview["warnings"]:
             self._emit(self._color(f"  Uyari: {warning}", "yellow"))
         for error in preview["errors"]:
@@ -1379,6 +1380,8 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
         if entry.get("env_vars"):
             self._emit(f"  Env       : {', '.join(entry['env_vars'])}")
         self._emit(f"  Calisma   : {'sandbox (pack tool)' if entry.get('sandbox') else 'ana process'}")
+        if entry.get("requires_approval"):
+            self._emit("  Onay      : her calismadan once (pack beyan etti)")
 
         func, error = _studio().load_custom_tool_callable(entry, include_disabled=True)
         if error or func is None:

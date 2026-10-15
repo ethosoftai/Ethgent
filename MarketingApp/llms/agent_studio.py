@@ -638,6 +638,7 @@ def load_custom_tools_config() -> dict[str, Any]:
                 "params_note": str(raw.get("params_note") or "").strip(),
                 "env_vars": _normalize_env_var_names(raw.get("env_vars")),
                 "sandbox": bool(raw.get("sandbox", False)),
+                "requires_approval": bool(raw.get("requires_approval", False)),
             }
         )
         seen.add(name)
@@ -663,6 +664,7 @@ def save_custom_tools_config(entries: list[dict[str, Any]]) -> None:
                 "params_note": str(entry.get("params_note") or "").strip(),
                 "env_vars": _normalize_env_var_names(entry.get("env_vars")),
                 "sandbox": bool(entry.get("sandbox", False)),
+                "requires_approval": bool(entry.get("requires_approval", False)),
             }
         )
     _write_yaml(CUSTOM_TOOLS_CONFIG_PATH, {"version": 1, "custom_tools": normalized})
@@ -748,6 +750,7 @@ def upsert_custom_tool(
         "env_vars": _normalize_env_var_names(env_var_names or env_vars or []),
         # A tool that came from an installed pack stays sandboxed when it is edited here.
         "sandbox": bool(entries[index].get("sandbox")) if index is not None else False,
+        "requires_approval": bool(entries[index].get("requires_approval")) if index is not None else False,
     }
     if index is None:
         entries.append(entry)
@@ -783,6 +786,7 @@ def load_custom_tool_callable(entry: dict[str, Any], *, include_disabled: bool =
                 env_names=list(entry.get("env_vars") or []),
                 env_values=read_model_env_vars,
                 description=str(entry.get("description") or ""),
+                requires_approval=bool(entry.get("requires_approval")),
             )
             return func, None
         load_model_env_file()
@@ -798,6 +802,12 @@ def load_custom_tool_callable(entry: dict[str, Any], *, include_disabled: bool =
             return None, f"{name} fonksiyonu export edilmemis."
         if not (func.__doc__ or "").strip() and entry.get("description"):
             func.__doc__ = entry["description"]
+        if entry.get("requires_approval"):
+            # The pack declared that this tool changes something outside: the host asks before it runs,
+            # whatever the tool's own code does.
+            from MarketingApp.environments.approval_runtime import gate_tool
+
+            func = gate_tool(func, name, str(entry.get("description") or ""))
         return func, None
     except Exception as exc:
         return None, str(exc)
@@ -1050,6 +1060,7 @@ def _iter_pack_tools(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any
                     "description": str(raw.get("description") or "").strip(),
                     "params_note": str(raw.get("params_note") or "").strip(),
                     "env_vars": _normalize_env_var_names(raw.get("env_vars")),
+                    "requires_approval": bool(raw.get("requires_approval", False)),
                 }
             )
         return items
@@ -1067,6 +1078,7 @@ def _iter_pack_tools(root: Path, manifest: dict[str, Any]) -> list[dict[str, Any
                 "description": "",
                 "params_note": "",
                 "env_vars": [],
+                "requires_approval": False,
             }
         )
     return items
@@ -1328,6 +1340,7 @@ def install_agent_pack(
             "params_note": str(tool.get("params_note") or "").strip(),
             "env_vars": _normalize_env_var_names(tool.get("env_vars")),
             "sandbox": not trusted,
+            "requires_approval": bool(tool.get("requires_approval")),
         }
         if existing_entry:
             updated_custom_entries = [item for item in updated_custom_entries if item["name"] != name]
@@ -1541,6 +1554,7 @@ def export_agent_pack(
                 "description": entry.get("description") or "",
                 "params_note": entry.get("params_note") or "",
                 "env_vars": list(entry.get("env_vars") or []),
+                **({"requires_approval": True} if entry.get("requires_approval") else {}),
             }
         )
 
