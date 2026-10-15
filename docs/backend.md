@@ -43,6 +43,9 @@ All settings are in [`.env.example`](../.env.example). The ones that matter here
 | `AGENT_WORKER_MCP_TOKEN` | Bearer token for MCP. Without it every MCP request is refused. |
 | `AGENT_WORKER_POLL_MS` | How often the queue is polled (default 4000). |
 | `ETHGENT_SANDBOX_URL`, `ETHGENT_SANDBOX_TOKEN` | Where pack tools run (step 5). |
+| `AGENT_WORKER_MCP_APPROVABLE_TOOLS` | Tools an MCP caller may approve for its own call (step 4). Empty by default. |
+| `AGENT_WORKER_HEARTBEAT_SECONDS`, `AGENT_WORKER_STALE_SECONDS`, `AGENT_WORKER_MAX_ATTEMPTS` | Recovery of jobs whose worker stopped (30, 300, 3; step 8). |
+| `ETHGENT_TELEMETRY_EXPORT` | `stdout` or a file path: run history, events and token usage as JSON lines (step 8). |
 
 A minimal Compose file next to your other services:
 
@@ -126,7 +129,9 @@ What asks:
 
 What does not ask: tools that only read, prepare a draft or keep something private, and the general browser and terminal tools (`browser_click_*`, `terminal_komut_calistir`). Those can do anything, so do not give them to a sub-agent that runs unattended unless you accept that. Sub-agents are switched on and off in `config/agents.yaml` (`/agent <name> off` at a terminal).
 
-A refused call returns `[Onay yok]: <tool> onaylanmadi, calistirilmadi.` to the model and nothing runs. Over MCP there is no approval list yet, so every gated tool is refused there. With `EthgentAgent` you pass `approval_handler=`, an async function `(action_id, description) -> bool`; without it everything gated is refused.
+A refused call returns `[Onay yok]: <tool> onaylanmadi, calistirilmadi.` to the model and nothing runs.
+
+Over MCP, `run_marketing_task` takes `approved_tools` too, but only tools you list in `AGENT_WORKER_MCP_APPROVABLE_TOOLS` are granted; the rest are ignored. The list is empty by default, so an MCP call approves nothing unless you decide otherwise. Keep it short: an MCP client is often itself a model, and whatever you list there it can approve. With `EthgentAgent` you pass `approval_handler=`, an async function `(action_id, description) -> bool`; without it everything gated is refused.
 
 ## 5. Install packs; their tools run in the sandbox
 
@@ -167,13 +172,15 @@ For your own domain, the same shape applies: a sub-agent with a prompt and a few
 
 ## 8. Operating it
 
-- **Logs** go to stdout. Run history, tool calls and token usage are also kept in a SQLite file in the workspace (`/data/workspace`); there is no exporter to your monitoring yet.
+- **Logs** go to stdout. Run history, tool calls and token usage are also kept in a SQLite file in the workspace (`/data/workspace/runtime/telemetry.sqlite`). Set `ETHGENT_TELEMETRY_EXPORT=stdout` (or a file path) to also get every record as one JSON line (`kind` is `run_start`, `run_end`, `event` or `llm_usage`, with `run_id`, `job_id`, tokens and status), which your log collector can read and turn into dashboards and alerts.
 - **Scaling.** One worker runs one task at a time. For more throughput run more workers, each with **its own** workspace volume: two processes on one workspace (for example a worker and the terminal) do not coordinate. The queue's skip-locked claim keeps them from taking the same job.
-- **Crashes.** A job that was `processing` when its worker died stays `processing`; nothing requeues it yet. Watch for rows stuck in that state (for example `started_at` older than your longest task) and requeue or fail them yourself. MCP jobs being waited on in memory are lost on restart; their `agent_jobs` row remains.
+- **Crashes.** While a job runs, its worker refreshes the row's `updated_at` every `AGENT_WORKER_HEARTBEAT_SECONDS`. Every minute, each worker looks for `processing` rows whose `updated_at` is older than `AGENT_WORKER_STALE_SECONDS`: a queued job goes back to `queued` (and is retried) until it has had `AGENT_WORKER_MAX_ATTEMPTS` attempts, then it is marked `failed`; a job that came over MCP is marked `failed`, since nobody waits for it any more. The update repeats the condition, so a worker that was only slow keeps its job. A retried job runs again from the start: a tool that already acted outside (a post, a payment) may act twice, which is one more reason to keep such tools behind approval.
 - **Browser sessions.** The social tools drive a signed-in browser profile in the workspace. That is an interactive setup by nature; for unattended publishing prefer the publishing worker, which uses official APIs and holds its own credentials.
 
 ## What has and has not been run
 
 Run: the worker in Docker with a local Postgres + PostgREST queue and a real model (DeepSeek), taking jobs from `agent_jobs`; a publish request without `approved_tools` refused at the gate; a connection sub-agent answering from the toolbox manifests; pack tools from the workflow factory running in the sandbox service (reading an inbox file, importing an installed package); a probe tool confirming what the sandbox hides. Before this repository had the worker, the same worker code ran inside a real application's backend (Kara Tahta) as a queue worker, limited by a database role to its own queue.
+
+Recovery of stalled jobs was run against the local PostgREST queue (a stale job requeued, one at its attempt limit failed, an MCP job failed, a live one untouched).
 
 Not run: a hosted Supabase project with the narrowed key, several workers on one queue, real publishing to a platform, real platform data, a team outside the authors integrating it.

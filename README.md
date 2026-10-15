@@ -424,7 +424,7 @@ The terminal is one way to run Ethgent. The other is headless, next to your own 
 | Entry point | How a task arrives | Approval comes from |
 |---|---|---|
 | **Queue worker** (`python -m MarketingApp.worker`) | Your backend inserts a row into the `agent_jobs` table (`migrations/`) with `payload = {"task": ..., "context": ..., "approved_tools": [...]}`; the worker claims it, runs it and writes `results` back | the job's `approved_tools`, set by whoever queued it |
-| **MCP** (served by the same worker on `AGENT_WORKER_MCP_PORT`, `Authorization: Bearer AGENT_WORKER_MCP_TOKEN`) | An MCP client calls `run_marketing_task`; a long task returns a job id to poll with `check_marketing_task` | nobody: every gated tool is refused |
+| **MCP** (served by the same worker on `AGENT_WORKER_MCP_PORT`, `Authorization: Bearer AGENT_WORKER_MCP_TOKEN`) | An MCP client calls `run_marketing_task`; a long task returns a job id to poll with `check_marketing_task` | the call's `approved_tools`, limited to the operator's `AGENT_WORKER_MCP_APPROVABLE_TOOLS` (empty by default) |
 | **In-process** (`EthgentAgent` in `MarketingApp/agent_api.py`) | Your Python code calls `await agent.run(task)` | your `approval_handler=`; refused by default |
 
 The worker reads the queue through Supabase's REST API (`SUPABASE_URL` plus a key; a narrowed key is preferred, see `migrations/002_*.sql`). Without those settings it does not poll; without an MCP token the MCP endpoint refuses every request. All settings are in `.env.example`.
@@ -441,7 +441,8 @@ Limits to know before you deploy:
 
 - **One process per workspace.** The worker and `EthgentAgent` serialize their own tasks, but two processes on the same workspace (for example the worker and the terminal) do not coordinate. Run more workers with separate workspaces.
 - **Pack tools need a sandbox next to the worker.** A worker in a container usually cannot start containers; run the sandbox service beside it ([how](#when-the-agent-itself-runs-in-a-container)), or installed packs fall back to the weaker process sandbox.
-- **Logs and run history are local** (a SQLite file in the workspace); there is no exporter to your monitoring yet.
+- **Logs and run history** are kept in a SQLite file in the workspace; `ETHGENT_TELEMETRY_EXPORT=stdout` also writes them as JSON lines for your log collector.
+- **A job whose worker stopped** is requeued (or failed after `AGENT_WORKER_MAX_ATTEMPTS`) by the next worker that notices; a retried job runs again from the start.
 
 [MarketingPool](https://github.com/Ahmet2001/MarketingPool) is a complete example: this worker, the queue, the connection workers and an application wired together with Docker Compose.
 

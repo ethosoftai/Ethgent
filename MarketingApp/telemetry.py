@@ -12,7 +12,9 @@ Tasarim kurallari
 * Yazma fonksiyonlari (``record_*``, ``start_run``, ``finish_run``) ASLA exception
   firlatmaz: gozlemlenebilirlik katmani is akisini bozmamali. Hata olursa
   ``health()`` icinde gorunur.
-* Her sey yerel SQLite'ta (``workspace/runtime/``, gitignore'da) durur; disari gitmez.
+* Her sey yerel SQLite'ta (``workspace/runtime/``, gitignore'da) durur. ``ETHGENT_TELEMETRY_EXPORT``
+  tanimliysa ayni kayitlar ayrica JSON satirlari olarak disari da yazilir: ``stdout`` ya da bir dosya
+  yolu. Bir log toplayici (Loki, Datadog, CloudWatch, ...) bunlari oradan okur.
 * Bir "run", ``run_scope`` ile acilir ve ContextVar ile tasinir; boylece ayni run
   icindeki LLM cagrilari ve log satirlari otomatik olarak o run'a baglanir
   (``asyncio.to_thread`` ve ``wait_for`` de context'i tasir).
@@ -23,7 +25,9 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import os
+import sys
 import re
 import sqlite3
 import threading
@@ -229,6 +233,25 @@ def _write(sql: str, params: tuple = ()) -> None:
         _drop_connection()  # bozuk baglanti bir sonraki cagrida yeniden kurulsun
 
 
+def _export(kind: str, **fields: Any) -> None:
+    """One JSON line per record for an external log collector. Never raises."""
+    target = (os.getenv("ETHGENT_TELEMETRY_EXPORT") or "").strip()
+    if not target:
+        return
+    record = {"ts": _iso(_now()), "kind": kind, "service": "ethgent"}
+    record.update({k: v for k, v in fields.items() if v not in (None, "")})
+    try:
+        line = json.dumps(record, ensure_ascii=False, default=str)
+        if target.lower() in {"stdout", "-"}:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        else:
+            with _lock, open(target, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+    except Exception:  # noqa: BLE001 - disa aktarma is akisini bozmamali
+        pass
+
+
 def _read(sql: str, params: tuple = ()) -> list[dict[str, Any]]:
     with _lock:
         conn = _connection()
@@ -296,10 +319,12 @@ def _maybe_prune() -> None:
 def record_event(type_: str, message: str, *, run_id: str | None = None) -> None:
     """Kalici log satiri. Aktif run varsa otomatik ona baglanir."""
     _maybe_prune()
+    resolved_run = run_id or _run_id_var.get()
     _write(
         "INSERT INTO events (ts, type, message, run_id) VALUES (?, ?, ?, ?)",
-        (_iso(_now()), _clip(type_ or "log", 40), _clip(message, _MAX_MESSAGE_CHARS), run_id or _run_id_var.get()),
+        (_iso(_now()), _clip(type_ or "log", 40), _clip(message, _MAX_MESSAGE_CHARS), resolved_run),
     )
+    _export("event", type=_clip(type_ or "log", 40), message=_clip(message, _MAX_MESSAGE_CHARS), run_id=resolved_run)
 
 
 def start_run(source: str, label: str, *, job_id: str = "", detail: str = "") -> str | None:
@@ -310,6 +335,7 @@ def start_run(source: str, label: str, *, job_id: str = "", detail: str = "") ->
         "VALUES (?, ?, ?, ?, ?, ?, 'running')",
         (run_id, _clip(source or "direct", 40), job_id or None, _clip(label, 200), _clip(detail, 200), _iso(_now())),
     )
+    _export("run_start", run_id=run_id, source=_clip(source or "direct", 40), job_id=job_id, label=_clip(label, 200))
     return None if _last_error else run_id
 
 
@@ -333,6 +359,10 @@ def finish_run(
             duration_ms,
             run_id,
         ),
+    )
+    _export(
+        "run_end", run_id=run_id, status=status, error=_clip(error, _MAX_ERROR_CHARS),
+        summary=_clip(summary, _MAX_SUMMARY_CHARS), duration_ms=duration_ms,
     )
 
 
@@ -422,6 +452,10 @@ def record_usage(agent: str, model: str, usage: Any, *, run_id: str | None = Non
         "INSERT INTO llm_usage (ts, run_id, agent, model, prompt_tokens, completion_tokens, total_tokens) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (_iso(_now()), resolved_run, _clip(agent or "?", 80), _clip(model or "?", 120), prompt, completion, total),
+    )
+    _export(
+        "llm_usage", run_id=resolved_run, agent=_clip(agent or "?", 80), model=_clip(model or "?", 120),
+        prompt_tokens=prompt, completion_tokens=completion, total_tokens=total,
     )
     if resolved_run:
         _write(

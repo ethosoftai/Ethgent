@@ -51,7 +51,7 @@ load_dotenv(dotenv_path=os.path.join(_PROJECT_ROOT, ".env.model"), override=True
 load_dotenv(dotenv_path=os.path.join(_PROJECT_ROOT, ".env.secrets"), override=True)
 
 from MarketingApp.agent_api import EthgentAgent
-from MarketingApp.environments.approval_runtime import approve_if_granted_by_job, job_approvals
+from MarketingApp.environments.approval_runtime import approve_if_granted_by_job, clean_approved_tools, job_approvals
 from MarketingApp.environments import agent_job_queue
 from MarketingApp.environments.agent_mcp_server import AgentMcpServer, build_auth_app
 from MarketingApp.environments.automation_runtime import (
@@ -64,6 +64,62 @@ _DEFAULT_MCP_HOST = "127.0.0.1"
 _DEFAULT_MCP_PORT = 8091
 _BUSY_RETRY_ATTEMPTS = 5
 _BUSY_RETRY_DELAY_SECONDS = 2.0
+_DEFAULT_HEARTBEAT_SECONDS = 30.0
+_DEFAULT_STALE_SECONDS = 300.0
+_DEFAULT_MAX_ATTEMPTS = 3
+_RECOVERY_INTERVAL_SECONDS = 60.0
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name) or default)
+    except ValueError:
+        return default
+
+
+def mcp_approvable_tools() -> frozenset[str]:
+    """Tools an MCP caller may approve for its own call (AGENT_WORKER_MCP_APPROVABLE_TOOLS, comma-separated).
+
+    Empty by default: an MCP call then approves nothing, as before. The operator sets this list; the
+    MCP caller can only ask for tools on it.
+    """
+    raw = (os.getenv("AGENT_WORKER_MCP_APPROVABLE_TOOLS") or "").replace(";", ",")
+    return clean_approved_tools([item for item in raw.split(",")])
+
+
+async def _heartbeat(job_id: str, every_seconds: float) -> None:
+    """While a job runs, keep its updated_at fresh so recovery does not take it from a live worker."""
+    while True:
+        await asyncio.sleep(every_seconds)
+        try:
+            await asyncio.to_thread(agent_job_queue.heartbeat_agent_job, job_id)
+        except agent_job_queue.AgentJobQueueError as exc:
+            print(f"⚠️ [Worker] heartbeat yazilamadi: {exc}")
+
+
+async def _with_heartbeat(job_id: str, coro):
+    if not job_id:
+        return await coro
+    beat = asyncio.create_task(_heartbeat(job_id, _float_env("AGENT_WORKER_HEARTBEAT_SECONDS", _DEFAULT_HEARTBEAT_SECONDS)))
+    try:
+        return await coro
+    finally:
+        beat.cancel()
+
+
+async def _recover_stale_jobs() -> None:
+    """Jobs left 'processing' by a worker that stopped: requeue them, or fail them after too many tries."""
+    stale = _float_env("AGENT_WORKER_STALE_SECONDS", _DEFAULT_STALE_SECONDS)
+    max_attempts = int(_float_env("AGENT_WORKER_MAX_ATTEMPTS", _DEFAULT_MAX_ATTEMPTS))
+    try:
+        outcome = await asyncio.to_thread(agent_job_queue.recover_stale_jobs, stale, max_attempts)
+    except agent_job_queue.AgentJobQueueError as exc:
+        print(f"⚠️ [Worker] durmus isler kontrol edilemedi: {exc}")
+        return
+    if outcome["requeued"]:
+        print(f"♻️ [Worker] Durmus isler tekrar kuyrukta: {', '.join(outcome['requeued'])}")
+    if outcome["failed"]:
+        print(f"🛑 [Worker] Durmus isler basarisiz sayildi: {', '.join(outcome['failed'])}")
 
 
 class AutomationBusyError(RuntimeError):
@@ -123,7 +179,12 @@ async def _queue_poll_loop(ethgent_agent: EthgentAgent, poll_ms: int) -> None:
         return
 
     print(f"📥 [Worker] agent_jobs kuyrugu dinleniyor ({poll_ms}ms araliklarla).")
+    loop = asyncio.get_running_loop()
+    next_recovery = 0.0
     while True:
+        if loop.time() >= next_recovery:
+            await _recover_stale_jobs()
+            next_recovery = loop.time() + _RECOVERY_INTERVAL_SECONDS
         try:
             job = await asyncio.to_thread(agent_job_queue.claim_next_agent_job)
         except agent_job_queue.AgentJobQueueError as exc:
@@ -148,7 +209,10 @@ async def _queue_poll_loop(ethgent_agent: EthgentAgent, poll_ms: int) -> None:
         try:
             # Onay isi baslatandan gelir (payload.approved_tools), modelden degil.
             with job_approvals(payload.get("approved_tools")):
-                result = await _execute_task_with_busy_retry(ethgent_agent, task, context, job_id=job_id, label=owner_ref)
+                result = await _with_heartbeat(
+                    job_id,
+                    _execute_task_with_busy_retry(ethgent_agent, task, context, job_id=job_id, label=owner_ref),
+                )
             await asyncio.to_thread(agent_job_queue.finish_agent_job, job_id, result)
             print(f"✅ [Worker] Is tamamlandi: {job_id}")
         except AutomationBusyError as exc:
@@ -162,13 +226,15 @@ async def _queue_poll_loop(ethgent_agent: EthgentAgent, poll_ms: int) -> None:
 
 
 def _build_mcp_run_task(ethgent_agent: EthgentAgent):
-    async def _mcp_run_task(task: str, context: str) -> dict:
+    async def _mcp_run_task(task: str, context: str, approved_tools: list[str] | None = None) -> dict:
+        # The caller may approve only tools the operator listed in AGENT_WORKER_MCP_APPROVABLE_TOOLS.
+        granted = sorted(clean_approved_tools(approved_tools or []) & mcp_approvable_tools())
         job_row = None
         if agent_job_queue.is_configured():
             try:
                 job_row = await asyncio.to_thread(
                     agent_job_queue.insert_agent_job,
-                    {"task": task, "context": context},
+                    {"task": task, "context": context, "approved_tools": granted},
                     owner_ref="mcp",
                     status="processing",
                     # Her MCP cagrisi ayri bir olaydir (retry yok, bkz.
@@ -182,9 +248,11 @@ def _build_mcp_run_task(ethgent_agent: EthgentAgent):
 
         job_id = str(job_row.get("id")) if job_row else ""
         try:
-            result = await _execute_task(
-                ethgent_agent, task, context, owner="agent_worker_mcp", job_id=job_id, label=task[:80]
-            )
+            with job_approvals(granted):
+                result = await _with_heartbeat(
+                    job_id,
+                    _execute_task(ethgent_agent, task, context, owner="agent_worker_mcp", job_id=job_id, label=task[:80]),
+                )
         except Exception as exc:
             if job_row:
                 await asyncio.to_thread(agent_job_queue.fail_agent_job, job_id, str(exc))

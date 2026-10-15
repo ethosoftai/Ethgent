@@ -29,7 +29,7 @@ from mcp.server.mcpserver import MCPServer
 _DEFAULT_WAIT_MS = 45000
 _JOB_RETENTION_SECONDS = 3600  # bellekteki bitmis is kayitlarini bu sureden sonra unut
 
-RunTaskFn = Callable[[str, str], Awaitable[dict[str, Any]]]
+RunTaskFn = Callable[[str, str, "list[str] | None"], Awaitable[dict[str, Any]]]
 
 
 @dataclass
@@ -65,7 +65,7 @@ class AgentMcpServer:
 
     def _register_tools(self) -> None:
         @self.server.tool()
-        async def run_marketing_task(task: str, context: str = "") -> dict[str, Any]:
+        async def run_marketing_task(task: str, context: str = "", approved_tools: list[str] | None = None) -> dict[str, Any]:
             """
             Ethgent marketing-agent'ine dogal dilde bir gorev gonderir ve calistirir.
             Kisa gorevlerde dogrudan sonucu (status: done) dondurur; gorev
@@ -76,8 +76,10 @@ class AgentMcpServer:
             Args:
                 task: Calistirilacak gorev (dogal dil).
                 context: Modelin gorev oncesi gorecegi ek baglam (opsiyonel).
+                approved_tools: Bu cagri icin onaylanan tool adlari. Yalnizca worker'in
+                    AGENT_WORKER_MCP_APPROVABLE_TOOLS listesindekiler gecerli olur; gerisi yok sayilir.
             """
-            return await self._start_and_wait(task, context)
+            return await self._start_and_wait(task, context, approved_tools)
 
         @self.server.tool()
         async def check_marketing_task(job_id: str) -> dict[str, Any]:
@@ -89,11 +91,11 @@ class AgentMcpServer:
             """
             return self._check(job_id)
 
-    async def _start_and_wait(self, task: str, context: str) -> dict[str, Any]:
+    async def _start_and_wait(self, task: str, context: str, approved_tools: list[str] | None = None) -> dict[str, Any]:
         job_id = uuid.uuid4().hex
         wait_ms = max(1000, int(os.getenv("AGENT_WORKER_WAIT_MS") or _DEFAULT_WAIT_MS))
 
-        asyncio_task = asyncio.create_task(self._run_task(task, context))
+        asyncio_task = asyncio.create_task(self._run_task(task, context, approved_tools))
         self._jobs[job_id] = _TrackedJob()
         asyncio_task.add_done_callback(lambda t: self._record_finished(job_id, t))
 

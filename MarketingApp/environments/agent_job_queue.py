@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -237,3 +237,76 @@ def fail_agent_job(job_id: str, error: str, results: dict[str, Any] | None = Non
             "updated_at": now,
         },
     )
+
+
+def heartbeat_agent_job(job_id: str) -> None:
+    """Calisan bir isin `updated_at`'ini yeniler: "bu is hala calisiyor" isareti.
+
+    `recover_stale_jobs` yalnizca bu isaret belirli bir sureden eski kalan isleri sahipsiz sayar.
+    """
+    base_url, key = _config()
+    try:
+        response = requests.patch(
+            f"{base_url}/rest/v1/agent_jobs",
+            headers=_headers(key),
+            params={"id": f"eq.{job_id}", "status": "eq.processing"},
+            json={"updated_at": _now_iso()},
+            timeout=_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise AgentJobQueueError(f"agent_jobs heartbeat basarisiz ({job_id}): {exc}") from exc
+
+
+def recover_stale_jobs(stale_seconds: float, max_attempts: int) -> dict[str, list[str]]:
+    """Calisan worker'i durmus (heartbeat'i `stale_seconds`'dan eski) 'processing' isleri toplar.
+
+    Kuyruktan gelen bir is `max_attempts`'a ulasmadiysa tekrar 'queued' olur, ulastiysa 'failed'.
+    MCP'den gelen bir is (owner_ref='mcp') tekrar kuyruga girmez: onu bekleyen cagri artik yok,
+    'failed' olur. Guncelleme ayni kosulla (hala processing ve hala eski) yapilir, boylece o arada
+    canlanan bir worker'in isi ezilmez.
+    """
+    base_url, key = _config()
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
+    try:
+        response = requests.get(
+            f"{base_url}/rest/v1/agent_jobs",
+            headers=_headers(key),
+            params={"status": "eq.processing", "updated_at": f"lt.{cutoff}", "select": "id,attempts,owner_ref", "limit": "100"},
+            timeout=_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        rows = response.json() or []
+    except requests.RequestException as exc:
+        raise AgentJobQueueError(f"durmus isler okunamadi: {exc}") from exc
+
+    outcome: dict[str, list[str]] = {"requeued": [], "failed": []}
+    for row in rows:
+        job_id = str(row.get("id") or "")
+        if not job_id:
+            continue
+        attempts = int(row.get("attempts") or 0)
+        now = _now_iso()
+        if row.get("owner_ref") == "mcp":
+            patch = {"status": "failed", "error": "worker stopped while this MCP call was running", "completed_at": now, "updated_at": now}
+            bucket = "failed"
+        elif attempts >= max_attempts:
+            patch = {"status": "failed", "error": f"worker stopped while running; gave up after {attempts} attempts", "completed_at": now, "updated_at": now}
+            bucket = "failed"
+        else:
+            patch = {"status": "queued", "started_at": None, "error": "requeued: the worker running it stopped", "updated_at": now}
+            bucket = "requeued"
+        try:
+            update = requests.patch(
+                f"{base_url}/rest/v1/agent_jobs",
+                headers=_headers(key, prefer="return=representation"),
+                params={"id": f"eq.{job_id}", "status": "eq.processing", "updated_at": f"lt.{cutoff}"},
+                json=patch,
+                timeout=_TIMEOUT_SECONDS,
+            )
+            update.raise_for_status()
+            if update.json():
+                outcome[bucket].append(job_id)
+        except requests.RequestException as exc:
+            raise AgentJobQueueError(f"durmus is guncellenemedi ({job_id}): {exc}") from exc
+    return outcome
