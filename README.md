@@ -413,10 +413,16 @@ print(result.text)
 
 A tool that does something irreversible (publishing, sending) asks the approval gate before it acts, with `await request_tool_approval(action_id, description)` from `MarketingApp.environments.approval_runtime`. The answer never comes from the model:
 
-- **At the terminal** the person is asked (`Onayliyor musun? [e/H]`); only `e`, `evet`, `y` or `yes` approves.
+- **At the terminal** the person is asked (`Onayliyor musun? [e/H/o]`); `e`, `evet`, `y` or `yes` approves this call, `o` approves that tool for the rest of the session, anything else refuses.
 - **Embedded (`EthgentAgent`)** the gate refuses everything unless you pass your own `approval_handler=` (an `async` function taking `(action_id, description)` and returning a bool).
 - **With no handler registered at all** it refuses.
 - A host that queues jobs can approve per job: wrap the run in `with job_approvals([...tool names...])` and register `approve_if_granted_by_job`. Only the tools the job names are approved, for the length of that job.
+
+### The built-in tools that post, reply, like or follow
+
+The agent's own social tools pass the same gate: the agent asks before they run, with the tool name and its arguments. These are `publish_x_post`, `publish_x_thread`, `submit_current_x_composer`, `reply_to_x_post`, `send_x_reply`, `quote_x_post`, `repost_x_post`, `like_x_post`, `follow_x_account`, `engage_with_x_post`, `like_instagram_post`, `follow_instagram_account`, `comment_instagram_post`, `like_youtube_video` and `subscribe_youtube_channel` (the list is `BUILTIN_EXTERNAL_WRITE_TOOLS` in `approval_runtime.py`). Tools that only read, only prepare a draft (`publish_x_post_with_media`) or stay private (`bookmark_x_post`) do not ask.
+
+The general browser and terminal tools (`browser_click_*`, `browser_type_*`, `terminal_komut_calistir`) are not gated: they can do anything, so a sub-agent that holds them can also post without asking. Give them only to agents you trust with that.
 
 ### Tools from packs declare it; the agent asks
 

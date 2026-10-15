@@ -142,3 +142,47 @@ def gate_tool(func, name: str, description: str = ""):
     gated.__signature__ = signature  # type: ignore[attr-defined]
     gated.ethgent_requires_approval = True  # type: ignore[attr-defined]
     return gated
+
+
+# ---------------------------------------------------------------- onay: yerlesik yazma tool'lari
+#
+# Ethgent'in kendi tool'lari arasinda dis dunyada baskalarinin gorecegi bir sey degistirenler
+# (post atmak, yanit yazmak, begenmek, takip etmek, yorum yapmak, abone olmak) de ayni kapidan
+# gecer: model bunlari cagirdiginda tool calismadan once kayitli isleyiciye sorulur. Terminalde
+# insan sorulur, gomulu API'de varsayilan cevap "hayir"dir, kuyruk worker'inda isi baslatanin
+# `approved_tools` listesi gecerlidir. Sadece taslak hazirlayan (publish_x_post_with_media),
+# okuyan ya da gizli kalan (bookmark_x_post) tool'lar listede yok. Genel tarayici ve terminal
+# tool'lari (browser_click_*, terminal_komut_calistir) da listede yok: onlar her seyi yapabilir,
+# bu yuzden onlari hangi ajana verdiginiz sizin sorumlulugunuzda.
+
+BUILTIN_EXTERNAL_WRITE_TOOLS = frozenset(
+    {
+        # X
+        "publish_x_post",
+        "publish_x_thread",
+        "submit_current_x_composer",
+        "reply_to_x_post",
+        "send_x_reply",
+        "quote_x_post",
+        "repost_x_post",
+        "like_x_post",
+        "follow_x_account",
+        "engage_with_x_post",
+        # Instagram
+        "like_instagram_post",
+        "follow_instagram_account",
+        "comment_instagram_post",
+        # YouTube
+        "like_youtube_video",
+        "subscribe_youtube_channel",
+    }
+)
+
+
+def gate_builtin_tool(func):
+    """Yerlesik bir tool dis dunyaya yaziyorsa onu kapidan gecirir, yazmiyorsa aynen dondurur."""
+    name = getattr(func, "__name__", "")
+    if name not in BUILTIN_EXTERNAL_WRITE_TOOLS or getattr(func, "ethgent_requires_approval", False):
+        return func
+    doc = (getattr(func, "__doc__", "") or "").strip().splitlines()
+    return gate_tool(func, name, doc[0].strip() if doc else "")

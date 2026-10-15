@@ -1714,6 +1714,8 @@ def _builtin_tool_groups() -> dict[str, list[Callable]]:
 
 
 def load_available_tools(*, include_custom: bool = True) -> dict[str, Any]:
+    from MarketingApp.environments.approval_runtime import gate_builtin_tool
+
     tools: dict[str, Callable] = {}
     groups_for_tool: dict[str, set[str]] = {}
     for group, funcs in _builtin_tool_groups().items():
@@ -1721,7 +1723,9 @@ def load_available_tools(*, include_custom: bool = True) -> dict[str, Any]:
             name = getattr(func, "__name__", "")
             if not name:
                 continue
-            tools.setdefault(name, func)
+            if name not in tools:
+                # Dis dunyaya yazan yerlesik tool'lar calismadan once onay ister.
+                tools[name] = gate_builtin_tool(func)
             groups_for_tool.setdefault(name, set()).add(group)
 
     errors: list[dict[str, Any]] = []
@@ -1731,7 +1735,8 @@ def load_available_tools(*, include_custom: bool = True) -> dict[str, Any]:
         errors.extend(loaded_custom["errors"])
         custom_entries = loaded_custom["entries"]
         for name, func in loaded_custom["tools"].items():
-            tools[name] = func
+            # Yerlesik bir yazma tool'unun adini alan bir custom tool da kapidan gecer.
+            tools[name] = gate_builtin_tool(func)
             groups_for_tool.setdefault(name, set()).add("custom")
 
     return {

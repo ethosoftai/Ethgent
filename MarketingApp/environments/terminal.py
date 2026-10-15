@@ -2056,14 +2056,21 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
             await release_automation("terminal", job_id=job_id)
 
     async def _request_terminal_approval(self, action_id: str, description: str) -> bool:
+        allowed = self.__dict__.setdefault("_session_approved_tools", set())
+        if action_id in allowed:
+            self.base_model.log_message("sistem", f"Terminal onayi: {action_id} -> bu oturumda onayli")
+            return True
         self._emit("")
         self._emit(self._color("ONAY GEREKLI", "yellow"))
         self._emit(f"  {description}")
         try:
-            answer = await self._read_line("  Onayliyor musun? [e/H]: ")
+            answer = await self._read_line("  Onayliyor musun? [e/H/o = bu oturumda hep evet]: ")
         except (EOFError, KeyboardInterrupt):
             return False
-        approved = (answer or "").strip().lower() in {"e", "evet", "y", "yes"}
+        answer = (answer or "").strip().lower()
+        if answer in {"o", "oturum"}:
+            allowed.add(action_id)
+        approved = answer in {"e", "evet", "y", "yes", "o", "oturum"}
         self.base_model.log_message(
             "sistem",
             f"Terminal onayi: {action_id} -> {'onaylandi' if approved else 'reddedildi'}",
