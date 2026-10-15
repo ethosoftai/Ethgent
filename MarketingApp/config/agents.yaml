@@ -54,6 +54,11 @@ agents:
   - submit_current_x_composer
   - subscribe_youtube_channel
   - update_queue_item
+  - worker_video_yayinla
+  - worker_instagram_carousel_yayinla
+  - worker_yayin_durumu_sorgula
+  - medya_hazirla
+  - medya_dogrula
   - workspace_ekle
   - workspace_listele
   - workspace_oku
@@ -76,6 +81,24 @@ agents:
   enabled: false
   description: Selenium tabanli web gezinme, DOM okuma ve form etkilesimi ajani.
   model: browser_default
+  tool_mode: default
+  system_prompt: ''
+  tools: []
+- name: asset_collector_agent
+  type: builtin
+  enabled: false
+  description: App'in onayli medya varliklarini listeleme, yayina hazirlama/dogrulama
+    ve App'ten video uretimi isteme ajani.
+  model: default
+  tool_mode: default
+  system_prompt: ''
+  tools: []
+- name: platform_data_agent
+  type: builtin
+  enabled: false
+  description: Platformlardan (YouTube, Instagram, TikTok, X, Reddit) manifest-onayli,
+    salt-okunur metrik/yorum/hesap verisi toplama ajani.
+  model: default
   tool_mode: default
   system_prompt: ''
   tools: []

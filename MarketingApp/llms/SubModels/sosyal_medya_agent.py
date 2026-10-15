@@ -54,7 +54,12 @@ DEFAULT_SYSTEM_PROMPT = (
     "`browser_click_text`, `browser_click_role`, `browser_click_css`, `browser_click_id`, "
     "`browser_eleman_bekle`, `browser_bekle`, `browser_screenshot`.\n"
     "14. X'te gorselli post attiysan final yaniyta media dosya yolunu ve cozulen tweet URL'sini yaz.\n"
-    "15. Gorev tamamlandiginda kisa ve net bir Turkce ozet ver.\n"
+    "15. `worker_video_yayinla`/`worker_instagram_carousel_yayinla` sadece kuyruga IS EKLER; "
+    "'kuyruga eklendi' mesaji YAYINLANDI anlamina gelmez ve onay reddedilirse is hic eklenmez. "
+    "Bu iki tool'u kullandiktan sonra bir sure bekleyip `worker_yayin_durumu_sorgula(job_id)` ile "
+    "gercek sonucu (done/failed) kontrol et; `context_aksiyon_kaydet`'e 'basarili' yazmadan once "
+    "bu dogrulamayi yap.\n"
+    "16. Gorev tamamlandiginda kisa ve net bir Turkce ozet ver.\n"
 )
 
 

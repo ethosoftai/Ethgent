@@ -36,6 +36,9 @@ AUTO_CONTEXT_LOG_TOOLS = {
     "website_iceriginden_post_paketi_uret",
     "html_css_post_olustur_ve_png_kaydet",
     "video_post_olustur_ve_mp4_kaydet",
+    "worker_video_yayinla",
+    "worker_instagram_carousel_yayinla",
+    "video_uretimi_iste",
 }
 
 
@@ -61,6 +64,10 @@ def _platform_for_tool(name: str) -> str:
         return "Instagram"
     if "youtube" in name:
         return "YouTube"
+    if name == "worker_video_yayinla":
+        return "worker (multi-platform)"
+    if name == "video_uretimi_iste":
+        return "content"
     if name in {"html_css_post_olustur_ve_png_kaydet", "video_post_olustur_ve_mp4_kaydet", "website_iceriginden_post_paketi_uret"}:
         return "content"
     return "workspace"

@@ -27,8 +27,7 @@
 - **Standalone.** Clone it, run `./run.sh`, and you have an orchestrator LLM (`BaseModel`) that delegates to specialised sub-agents, a terminal to manage it, and its own logs, run history and cost tracking. It is a product you operate, not a framework you assemble.
 - **Configured, not coded.** What the agent *is for* is decided by its configuration: which sub-agents exist, which tools they own, and what their prompts say. Agents and tools live in YAML and in packs, and can be created, edited, pulled from another repository and shared from the terminal.
 - **Social media by default, any domain by design.** It ships tuned for **social media and content** (X, Instagram, YouTube, image and video content, browser automation, research), but that is a configuration, not a limit. See [Make it your own](#make-it-your-own).
-
-It can also be embedded as a library in another Python process ([see below](#using-ethgent-as-an-embedded-agent)), but that is the exception.
+- **Runs inside your backend too.** The same agent runs headless as a queue worker, an MCP endpoint or a library in your Python code ([Running inside your backend](#running-inside-your-backend)).
 
 ## Features
 
@@ -142,7 +141,7 @@ Ready-made connectors and workers that join Ethgent to an application or to plat
 
 ## The agents
 
-The orchestrator (`BaseModel`) does not call tools directly: it hands a task to a **sub-agent**, and each sub-agent owns its own model and its own set of tools. Seven sub-agents ship in `config/agents.yaml`; two are on by default. A deployment can add more (the MarketingPool example adds two, shown dashed), and so can you with `/agent create` or a pack.
+The orchestrator (`BaseModel`) does not call tools directly: it hands a task to a **sub-agent**, and each sub-agent owns its own model and its own set of tools. Nine sub-agents ship in `config/agents.yaml`; two are on by default. Two of the others connect the agent to an application's backend (shown dashed). You can add more with `/agent create` or a pack.
 
 ```mermaid
 flowchart TB
@@ -167,7 +166,7 @@ flowchart TB
     end
     O -.-> AC
     O -.-> PD
-    subgraph added[Added by a deployment, for example MarketingPool]
+    subgraph added[Connection to a backend, off by default]
         AC[asset_collector_agent<br/>an app's approved media]
         PD[platform_data_agent<br/>read-only platform data]
     end
@@ -183,10 +182,12 @@ flowchart TB
 | `arastirma_agent` | Multi-query web research and report writing | off | Gemini Live (needs `GEMINI_API_KEY`) |
 | `sistem_agent` | File and workspace management, system status, terminal commands | off | Gemini Live |
 | `vlm_agent` | Screen capture and mouse/keyboard control with a self-verifying vision loop | off | Gemini Live |
+| `asset_collector_agent` | Lists, validates and prepares the approved media an application exposes; asks the application to generate a video | off | `default` |
+| `platform_data_agent` | Asks a separate worker for read-only platform data; never holds the platform's credentials | off | `default` |
 
 Turn one on with `/agent <name> on`, inspect it with `/agent show <name>`, and write your own with `/agent create` ([Terminal Commands](#terminal-commands)). Tools marked as risky ask for approval in the terminal before they run.
 
-**The two a deployment can add.** `asset_collector_agent` lists, validates and prepares the approved media an application exposes. `platform_data_agent` asks a separate worker for read-only platform data and never holds the platform's credentials. Both live in the MarketingPool copy of this agent, not in this repository; they show that adding a sub-agent is a configuration step, not a change to the orchestrator.
+**The two that connect to a backend.** `asset_collector_agent` reads an application's approved media through the `asset-pool` contract (`APP_INTERNAL_URL`, `APP_INTERNAL_TOKEN`). `platform_data_agent` queues read-only data requests for a separate worker and never holds the platform's credentials (`TOOLBOXES_DIR`, the queue settings). The contract, the workers and the toolboxes are in [Marketing Agent Assets](https://github.com/Ahmet2001/MarketingPool/tree/main/marketing-agent-assets); [MarketingPool](https://github.com/Ahmet2001/MarketingPool) runs them all together with Docker. Without those settings the two return a clear configuration error, which is why they are off by default. They show that connecting to a system is a sub-agent with its own tools, not a change to the orchestrator.
 
 ## Architecture
 
@@ -390,24 +391,33 @@ Management commands are `/agent`, `/tool`, `/heartbeat`, `/usage`, … on Telegr
 
 </details>
 
-## Using Ethgent as an Embedded Agent
+## Running inside your backend
 
-<details>
-<summary>An advanced, secondary integration path</summary>
+The terminal is one way to run Ethgent. The other is headless, next to your own services, with no one at a keyboard. There are three entry points, and all of them use the same orchestrator, sub-agents and tools:
 
-Ethgent's primary form is the standalone terminal app described above; nothing here changes that. `MarketingApp/agent_api.py` exists only for the narrow case where another Python orchestrator (for example an asset-generation pipeline) needs to call Ethgent's `BaseModel` in-process instead of running it as a separate app: no logs/run-history/telemetry UI, no bots, no terminal, just a single `run()` call.
+| Entry point | How a task arrives | Approval comes from |
+|---|---|---|
+| **Queue worker** (`python -m MarketingApp.worker`) | Your backend inserts a row into the `agent_jobs` table (`migrations/`) with `payload = {"task": ..., "context": ..., "approved_tools": [...]}`; the worker claims it, runs it and writes `results` back | the job's `approved_tools`, set by whoever queued it |
+| **MCP** (served by the same worker on `AGENT_WORKER_MCP_PORT`, `Authorization: Bearer AGENT_WORKER_MCP_TOKEN`) | An MCP client calls `run_marketing_task`; a long task returns a job id to poll with `check_marketing_task` | nobody: every gated tool is refused |
+| **In-process** (`EthgentAgent` in `MarketingApp/agent_api.py`) | Your Python code calls `await agent.run(task)` | your `approval_handler=`; refused by default |
+
+The worker reads the queue through Supabase's REST API (`SUPABASE_URL` plus a key; a narrowed key is preferred, see `migrations/002_*.sql`). Without those settings it does not poll; without an MCP token the MCP endpoint refuses every request. All settings are in `.env.example`.
 
 ```python
 from MarketingApp.agent_api import EthgentAgent
 
-agent = EthgentAgent(workspace_dir="/path/to/pool/brandX/workspace")
+agent = EthgentAgent(workspace_dir="/path/to/brandX/workspace")
 result = await agent.run("Draft a post about today's topic for X")
 print(result.text)
 ```
 
-`EthgentAgent` never starts the heartbeat/Telegram/Discord background tasks. Workspace and config directories can be redirected per instance via `workspace_dir`/`config_dir` (see the module docstring for the single-process-per-workspace caveat).
+Limits to know before you deploy:
 
-</details>
+- **One process per workspace.** The worker and `EthgentAgent` serialize their own tasks, but two processes on the same workspace (for example the worker and the terminal) do not coordinate. Run more workers with separate workspaces.
+- **The pack sandbox needs Docker on the host.** A worker that itself runs in a container usually cannot start containers, so installed packs fall back to the weaker process sandbox (see [Sandbox](#sandbox-for-installed-packs)).
+- **Logs and run history are local** (a SQLite file in the workspace); there is no exporter to your monitoring yet.
+
+[MarketingPool](https://github.com/Ahmet2001/MarketingPool) is a complete example: this worker, the queue, the connection workers and an application wired together with Docker Compose.
 
 ## Approval for tools that change something outside
 
@@ -447,6 +457,7 @@ Workflows exported by the workflow factory with a step that writes outside the m
 ```
 MarketingApp/
 ├── agent_api.py         # Embeddable agent wrapper (EthgentAgent)
+├── worker.py             # Headless worker: polls the agent_jobs queue and serves MCP (python -m MarketingApp.worker)
 ├── paths.py              # Central, overridable workspace/config path resolution
 ├── main.py               # Entry point (python -m MarketingApp.main)
 ├── telemetry.py           # Persistent logs, run history and token usage
@@ -457,6 +468,7 @@ MarketingApp/
 ├── llms/                  # BaseModel orchestrator, Agent Studio, SubModels/
 ├── legacy/panel/          # Archived FastAPI web panel (superseded by the terminal interface)
 └── workspace/              # Runtime data: memory, drafts, assets, custom tools, agent packs
+migrations/                  # SQL for the agent_jobs queue table the worker reads
 tests/                       # unittest suite (isolated temp workspace)
 ```
 

@@ -64,6 +64,17 @@ SUBMODEL_ROUTING_RULES = {
         "Genel web gezinme, DOM okuma, form doldurma ve Selenium tabanli tarayici "
         "isleri icin bu alt ajani kullan."
     ),
+    "asset_collector_agent": (
+        "App'in onayli medya varliklarini listeleme/detaylandirma, bir varligi yayina "
+        "hazirlama ve dogrulama (`media_ref` uretir), ya da App'ten yeni bir video "
+        "uretimi isteme gorevlerini bu alt ajana devret. Yayin araclari imzali URL "
+        "yerine bu ajanin dondurdugu `media_ref` ile calisir."
+    ),
+    "platform_data_agent": (
+        "Bir platformun (YouTube, Instagram, TikTok, X, Reddit) metriklerini, yorumlarini "
+        "veya hesap/icerik verisini SALT-OKUNUR olarak toplama ve yorumlama gorevlerini "
+        "bu alt ajana devret; platform kimlik bilgilerine erisimi yoktur."
+    ),
 }
 
 

@@ -35,6 +35,29 @@ from .content_creator_araclari import (
     video_post_olustur_ve_mp4_kaydet,
     html_css_post_olustur_ve_png_kaydet,
 )
+from .worker_yayinlama_araclari import (
+    worker_video_yayinla,
+    worker_instagram_carousel_yayinla,
+    worker_yayin_durumu_sorgula,
+)
+from .app_asset_araclari import (
+    app_baglanti_durumu,
+    app_asset_listele,
+    app_asset_detay,
+)
+from .medya_araclari import (
+    medya_dogrula,
+    medya_hazirla,
+)
+from .video_uretim_araclari import (
+    video_uretimi_iste,
+    video_uretimi_durumu,
+)
+from .platform_veri_araclari import (
+    platform_veri_eylemleri,
+    platform_veri_topla,
+    platform_veri_durumu,
+)
 
 
 def _missing_tool(tool_name: str, error: Exception):
@@ -321,6 +344,13 @@ SOSYAL_MEDYA_ARACLARI = [
     inspect_youtube_video,
     like_youtube_video,
     subscribe_youtube_channel,
+    # --- Worker uzerinden video/carousel yayinlama (social-media-worker) ---
+    worker_video_yayinla,
+    worker_instagram_carousel_yayinla,
+    worker_yayin_durumu_sorgula,
+    # --- Yayin oncesi medya hazirlama (media_ref uretir; imzali URL modele gosterilmez) ---
+    medya_dogrula,
+    medya_hazirla,
     # --- Workspace (strateji/log dosyalari icin) ---
     context_paketi_oku,
     context_aksiyon_kaydet,
@@ -423,6 +453,36 @@ CONTENT_CREATOR_ARACLARI = [
     workspace_listele,
 ]
 
+ASSET_COLLECTOR_ARACLARI = [
+    app_baglanti_durumu,
+    app_asset_listele,
+    app_asset_detay,
+    medya_dogrula,
+    medya_hazirla,
+    video_uretimi_iste,
+    video_uretimi_durumu,
+    context_paketi_oku,
+    context_aksiyon_kaydet,
+    workspace_oku,
+    workspace_sonunu_oku,
+    workspace_yaz,
+    workspace_ekle,
+    workspace_listele,
+]
+
+PLATFORM_DATA_ARACLARI = [
+    platform_veri_eylemleri,
+    platform_veri_topla,
+    platform_veri_durumu,
+    context_paketi_oku,
+    context_aksiyon_kaydet,
+    workspace_oku,
+    workspace_sonunu_oku,
+    workspace_yaz,
+    workspace_ekle,
+    workspace_listele,
+]
+
 GENERIC_BROWSER_TOOLS_ACTIVE = True
 
 BROWSER_ARACLARI = [] if not GENERIC_BROWSER_TOOLS_ACTIVE else [
@@ -468,6 +528,8 @@ _AGENT_TOOL_MAP = {
     "base": BASE_ARACLAR,
     "sosyal_medya_agent": SOSYAL_MEDYA_ARACLARI,
     "content_creator_agent": CONTENT_CREATOR_ARACLARI,
+    "asset_collector_agent": ASSET_COLLECTOR_ARACLARI,
+    "platform_data_agent": PLATFORM_DATA_ARACLARI,
     "sistem_agent": SISTEM_ARACLARI,
     "arastirma_agent": ARAMA_ARACLARI,
     "kod_agent": KOD_ARACLARI,
