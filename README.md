@@ -131,8 +131,8 @@ Export the agent with its tools and prompt as a pack, put the folder in a GitHub
 
 The installer shallow-clones the repository, shows a preview of the agents and tools it would add, and asks before installing. The export lists environment variable **names** only, never values. More in [Sharing a setup](#sharing-a-setup).
 
-> [!WARNING]
-> A pack carries tool code that runs on your machine. Read the preview and install only packs you trust.
+> [!IMPORTANT]
+> A pack carries code. Its tools run in a **sandbox**: a throwaway container per call that sees none of the agent's keys, only the variables the pack declared, with memory, CPU and time limits. Add `--trust` only for packs you wrote or reviewed; then they run in the agent's own process. See [Sandbox for installed packs](#sandbox-for-installed-packs).
 
 ### Other domains work the same way
 
@@ -231,6 +231,7 @@ Copy `.env.example` to `.env` and fill in your keys. Settings are loaded in this
 | `TELEGRAM_ALLOWED_USER_IDS` / `DISCORD_ALLOWED_USER_IDS` | Who may chat with the bot (see [Telegram and Discord](#telegram-and-discord)) |
 | `TELEGRAM_ADMIN_IDS` / `DISCORD_ADMIN_IDS` | Who may run management commands remotely |
 | `ETHGENT_TELEMETRY_RETENTION_DAYS` | How long logs/runs/usage are kept (default `30`, `0` = forever) |
+| `ETHGENT_SANDBOX` | Where installed pack tools run: `auto` (default), `container` or `subprocess`; see [Sandbox for installed packs](#sandbox-for-installed-packs) |
 
 > [!CAUTION]
 > All API keys and tokens live only in the gitignored `.env*` files (`.env`, `.env.local`, `.env.model`, `.env.secrets`). Never commit real credentials.
@@ -318,7 +319,31 @@ The code is compiled, checked for a function named after the tool, and actually 
 `export` writes `plugin.yaml`, `agents/`, `prompts/`, `tools/`, a README and an `env.example` that contains variable **names only**, never values. `install` from GitHub shallow-clones the repository, shows the preview, and asks before installing.
 
 - **Builtin tools** cannot be packaged: they already exist in every install.
-- **Builtin agents** can. One you scaffolded yourself (`/agent create --builtin`) travels with its own `submodels/<name>.py` source and installs even where it doesn't exist yet. One of the seven agents the app ships with (`sosyal_medya_agent`, `content_creator_agent`, …) travels as config only (model, tools, prompt), since the target install already has its code.
+- **Builtin agents** can. One you scaffolded yourself (`/agent create --builtin`) travels with its own `submodels/<name>.py` source and installs even where it doesn't exist yet. Because that source runs in the agent's own process, a pack carrying it installs only with `--trust`. One of the seven agents the app ships with (`sosyal_medya_agent`, `content_creator_agent`, …) travels as config only (model, tools, prompt), since the target install already has its code.
+
+### Sandbox for installed packs
+
+Isolation follows trust, not the number of agents. Your own tools (`/tool create`) and the built-in ones run in the agent's process. Tools that arrive in a pack (`/agent pack install`) run in a sandbox; the sub-agent that owns them stays in the agent's process and calls into the sandbox for each tool call. The tool's code is never executed in the agent's process: its name, docstring and parameters are read from the source.
+
+| Mode | When | What the tool gets |
+|---|---|---|
+| `container` | `ETHGENT_SANDBOX=container`, or `auto` when Docker is reachable | A throwaway container per call: read-only filesystem except `/tmp`, an unprivileged user, all capabilities dropped, memory, CPU, process and time limits, and optionally no network. The tool file is mounted read-only; the agent's installed packages are shared read-only so a tool can `import requests`. |
+| `subprocess` | `ETHGENT_SANDBOX=subprocess`, or `auto` without Docker | A separate Python process with the same memory, CPU and time limits. It shares the host's filesystem and network, so it is weaker than a container. |
+
+In both modes the tool sees **only the environment variables it declared**, never the agent's model keys, chat tokens or database keys. A pack cannot get those by declaring their names: variables the agent itself uses (model keys, `TELEGRAM_*`, `SUPABASE_*`, …) are withheld even if declared. A tool that runs past its time limit is stopped, and one that ignores that is killed.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ETHGENT_SANDBOX_TIMEOUT` | `60` | Seconds per tool call |
+| `ETHGENT_SANDBOX_MEMORY_MB` | `512` | Memory limit |
+| `ETHGENT_SANDBOX_CPUS` | `1` | CPU share (container mode) |
+| `ETHGENT_SANDBOX_NETWORK` | `bridge` | `none` cuts the network (container mode) |
+| `ETHGENT_SANDBOX_IMAGE` | `python:<your version>-slim` | Image for container mode |
+
+`/agent pack install <src> --trust` installs a pack's tools in the agent's process instead, with access to everything the agent can reach; use it only for packs you wrote or reviewed. `/tool show <name>` tells you where a tool runs.
+
+> [!NOTE]
+> If the agent itself runs inside a container (as in the MarketingPool Docker setup), Docker is normally not reachable from inside it, so `auto` falls back to `subprocess`. Running a separate sandbox service next to the agent for that case is not built yet.
 
 ## Operations: logs, run history, usage
 

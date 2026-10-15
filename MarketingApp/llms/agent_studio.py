@@ -637,6 +637,7 @@ def load_custom_tools_config() -> dict[str, Any]:
                 "file": file_name,
                 "params_note": str(raw.get("params_note") or "").strip(),
                 "env_vars": _normalize_env_var_names(raw.get("env_vars")),
+                "sandbox": bool(raw.get("sandbox", False)),
             }
         )
         seen.add(name)
@@ -661,6 +662,7 @@ def save_custom_tools_config(entries: list[dict[str, Any]]) -> None:
                 "file": os.path.basename(str(entry.get("file") or f"{name}.py")),
                 "params_note": str(entry.get("params_note") or "").strip(),
                 "env_vars": _normalize_env_var_names(entry.get("env_vars")),
+                "sandbox": bool(entry.get("sandbox", False)),
             }
         )
     _write_yaml(CUSTOM_TOOLS_CONFIG_PATH, {"version": 1, "custom_tools": normalized})
@@ -736,6 +738,7 @@ def upsert_custom_tool(
 
     config = load_custom_tools_config()
     entries = list(config["custom_tools"])
+    index = next((i for i, item in enumerate(entries) if item["name"] == normalized_name), None)
     entry = {
         "name": normalized_name,
         "enabled": bool(enabled),
@@ -743,8 +746,9 @@ def upsert_custom_tool(
         "file": file_name,
         "params_note": params_note.strip(),
         "env_vars": _normalize_env_var_names(env_var_names or env_vars or []),
+        # A tool that came from an installed pack stays sandboxed when it is edited here.
+        "sandbox": bool(entries[index].get("sandbox")) if index is not None else False,
     }
-    index = next((i for i, item in enumerate(entries) if item["name"] == normalized_name), None)
     if index is None:
         entries.append(entry)
     else:
@@ -768,6 +772,19 @@ def load_custom_tool_callable(entry: dict[str, Any], *, include_disabled: bool =
         path = _custom_tool_path(entry.get("file") or f"{name}.py")
         if not path.exists():
             return None, f"{path.name} bulunamadi."
+        if entry.get("sandbox"):
+            # Pack tool: build a stand-in from the source text; the code runs only in the sandbox,
+            # and only with the env names it declared (never the agent's own keys).
+            from MarketingApp.sandbox import make_sandboxed_tool
+
+            func = make_sandboxed_tool(
+                name,
+                path,
+                env_names=list(entry.get("env_vars") or []),
+                env_values=read_model_env_vars,
+                description=str(entry.get("description") or ""),
+            )
+            return func, None
         load_model_env_file()
         # Kaynagi dogrudan derle: spec_from_file_location + exec_module __pycache__ kullanir ve .pyc
         # dogrulamasi mtime'i SANIYE cozunurlugunde + dosya boyutuyla yapar. Ayni saniyede yapilan ayni
@@ -845,6 +862,7 @@ def load_agent_packs_config() -> dict[str, Any]:
                 "installed_agents": _normalize_string_list(raw.get("installed_agents")),
                 "installed_tools": _normalize_string_list(raw.get("installed_tools")),
                 "installed_at": str(raw.get("installed_at") or "").strip(),
+                "trusted": bool(raw.get("trusted", False)),
             }
         )
         seen.add(name)
@@ -875,6 +893,7 @@ def save_agent_packs_config(entries: list[dict[str, Any]]) -> None:
                 "installed_agents": _normalize_string_list(entry.get("installed_agents")),
                 "installed_tools": _normalize_string_list(entry.get("installed_tools")),
                 "installed_at": str(entry.get("installed_at") or "").strip(),
+                "trusted": bool(entry.get("trusted", False)),
             }
         )
     _write_yaml(AGENT_PACKS_CONFIG_PATH, {"version": 1, "installed_packs": normalized})
@@ -1182,8 +1201,8 @@ def preview_agent_pack(path_value: str) -> dict[str, Any]:
             if normalized["type"] == "builtin":
                 if normalized.get("submodel_file"):
                     warnings.append(
-                        f"{normalized['name']} builtin tipinde; pack kendi Python kaynagini tasiyor, "
-                        "kurulumda submodel dosyasi olarak yazilacak."
+                        f"{normalized['name']} builtin tipinde; pack kendi Python kaynagini tasiyor. Bu kod ana "
+                        "process'te calisir ve sandbox'a alinamaz; yalnizca --trust ile kurulur."
                     )
                 elif not is_known_builtin_agent_name(normalized["name"]):
                     warnings.append(
@@ -1221,10 +1240,27 @@ def preview_agent_pack(path_value: str) -> dict[str, Any]:
     }
 
 
-def install_agent_pack(path_value: str, *, overwrite: bool = False, source_label: str | None = None) -> dict[str, Any]:
+def install_agent_pack(
+    path_value: str,
+    *,
+    overwrite: bool = False,
+    source_label: str | None = None,
+    trusted: bool = False,
+) -> dict[str, Any]:
+    """Install a pack. Its tools run in the sandbox unless ``trusted`` is set.
+
+    A pack can also carry Python source for a builtin sub-agent. That code would run in the
+    agent's own process, so it is only installed when the pack is explicitly trusted.
+    """
     preview = preview_agent_pack(path_value)
     if preview["errors"]:
         raise AgentStudioError("Pack preview hata verdi; kurulum yapilmadi.")
+    python_agents = [agent["name"] for agent in preview["agents"] if agent["type"] == "builtin" and agent.get("submodel_path")]
+    if python_agents and not trusted:
+        raise AgentStudioError(
+            f"Pack Python kodlu ajan tasiyor ({', '.join(python_agents)}); bu kod ana process'te calisir, "
+            "sandbox'a alinamaz. Pack'e guveniyorsan --trust ile kur."
+        )
     if preview["type"] not in {"tool_pack", "agent_bundle"}:
         raise AgentStudioError("MVP kurulum akisi su an sadece tool_pack ve agent_bundle destekliyor.")
 
@@ -1291,6 +1327,7 @@ def install_agent_pack(path_value: str, *, overwrite: bool = False, source_label
             "file": target_path.name,
             "params_note": str(tool.get("params_note") or "").strip(),
             "env_vars": _normalize_env_var_names(tool.get("env_vars")),
+            "sandbox": not trusted,
         }
         if existing_entry:
             updated_custom_entries = [item for item in updated_custom_entries if item["name"] != name]
@@ -1347,6 +1384,7 @@ def install_agent_pack(path_value: str, *, overwrite: bool = False, source_label
             "installed_agents": installed_agent_names,
             "installed_tools": [item["name"] for item in preview["tools"]],
             "installed_at": datetime.now(timezone.utc).isoformat(),
+            "trusted": bool(trusted),
         }
     )
     save_agent_packs_config(entries)
@@ -1359,6 +1397,7 @@ def install_agent_pack(path_value: str, *, overwrite: bool = False, source_label
             "installed_path": str(installed_root),
             "installed_agents": installed_agent_names,
             "installed_tools": [item["name"] for item in preview["tools"]],
+            "trusted": bool(trusted),
         },
         "catalog": load_agent_studio_catalog(),
     }

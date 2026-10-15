@@ -233,7 +233,7 @@ Komutlar
   /agent test <ad> "gorev"        Tek ajani dogrudan calistir
   /agent pack list                Kurulu agent pack'leri listele
   /agent pack preview <yol>       Pack'i kurmadan incele
-  /agent pack install <yol>       Pack kur (--overwrite, --yes)
+  /agent pack install <yol>       Pack kur (--overwrite, --yes, --trust: sandbox'siz)
                                   <yol> yerine github:kullanici/repo[@dal][#alt/klasor] da olur
   /agent pack export <ad>         Kurulumunu paylasilabilir pakete cikar
   /tools [arama]                  Tool'lari listele veya filtrele
@@ -726,9 +726,9 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
             )
             return
 
-        positional, flags = self._parse_flags(rest, bool_flags={"overwrite", "yes"})
+        positional, flags = self._parse_flags(rest, bool_flags={"overwrite", "yes", "trust"})
         if len(positional) != 1:
-            self._emit(f"Kullanim: /agent pack {action} <yol>" + (" [--overwrite] [--yes]" if action == "install" else ""))
+            self._emit(f"Kullanim: /agent pack {action} <yol>" + (" [--overwrite] [--yes] [--trust]" if action == "install" else ""))
             return
 
         source = positional[0]
@@ -744,12 +744,16 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
         if not preview["installable"]:
             self._emit(self._color("Pack kurulabilir durumda degil; kurulum yapilmadi.", "red"))
             return
+        trusted = bool(flags.get("trust"))
+        self._emit_sandbox_plan(trusted)
         if not flags.get("yes") and not await self._confirm(f"  {preview['name']} kurulacak. Onayliyor musun? [e/H]: "):
             self._emit("Kurulum iptal edildi.")
             return
 
         label = source if _studio().is_github_pack_spec(source) else None
-        result = _studio().install_agent_pack(path_value, overwrite=bool(flags.get("overwrite")), source_label=label)
+        result = _studio().install_agent_pack(
+            path_value, overwrite=bool(flags.get("overwrite")), source_label=label, trusted=trusted
+        )
         pack = result["pack"]
         self._emit(self._color(f"Pack kuruldu: {pack['name']} v{pack['version']}", "green"))
         self._emit(f"  Konum: {pack['installed_path']}")
@@ -790,6 +794,25 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
         for warning in result["warnings"]:
             self._emit(self._color(f"  Uyari: {warning}", "yellow"))
         self._emit(f"  Kurmak icin: /agent pack install {result['path']}")
+
+    def _emit_sandbox_plan(self, trusted: bool) -> None:
+        """Says before install where the pack's tools will run."""
+        if trusted:
+            self._emit(self._color("  --trust: pack tool'lari ana process'te, ajanin anahtarlariyla birlikte calisacak.", "yellow"))
+            return
+        from MarketingApp import sandbox
+
+        try:
+            mode = sandbox.resolve_mode()
+        except sandbox.SandboxError as exc:
+            self._emit(self._color(f"  Sandbox: {exc}", "red"))
+            return
+        if mode == "container":
+            self._emit("  Sandbox: pack tool'lari her cagrida ayri, sinirli bir Docker container'inda calisacak.")
+        else:
+            self._emit(self._color(
+                "  Sandbox: Docker yok; pack tool'lari ayri bir process'te, anahtarsiz ama ayni dosya sistemi "
+                "ve agla calisacak.", "yellow"))
 
     def _print_pack_preview(self, preview: dict[str, Any]) -> None:
         self._emit(self._color(f"Pack: {preview['name']} v{preview['version']} ({preview['type']})", "bold"))
@@ -1355,6 +1378,7 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
             self._emit(f"  Parametre : {entry['params_note']}")
         if entry.get("env_vars"):
             self._emit(f"  Env       : {', '.join(entry['env_vars'])}")
+        self._emit(f"  Calisma   : {'sandbox (pack tool)' if entry.get('sandbox') else 'ana process'}")
 
         func, error = _studio().load_custom_tool_callable(entry, include_disabled=True)
         if error or func is None:

@@ -297,7 +297,13 @@ class PackTests(TerminalCase):
         submodel_base._SUBMODEL_REGISTRY.pop("ozel_ajanim", None)
         self.assertIsNone(agent_entry("ozel_ajanim"))
 
+        # Python kodlu ajan ana process'te calisir: --trust olmadan kurulmaz.
         out = await self.run_cmd(f"/agent pack install {pack} --yes")
+        self.assertNotIn("Pack kuruldu", out)
+        self.assertIn("--trust", out)
+        self.assertFalse(scaffold_path.exists())
+
+        out = await self.run_cmd(f"/agent pack install {pack} --yes --trust")
         self.assertIn("Pack kuruldu", out)
         self.assertTrue(scaffold_path.exists())
         self.assertIn("ozel_ajanim", init_path.read_text(encoding="utf-8"))
