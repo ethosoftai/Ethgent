@@ -232,7 +232,7 @@ Copy `.env.example` to `.env` and fill in your keys. Settings are loaded in this
 | `TELEGRAM_ALLOWED_USER_IDS` / `DISCORD_ALLOWED_USER_IDS` | Who may chat with the bot (see [Telegram and Discord](#telegram-and-discord)) |
 | `TELEGRAM_ADMIN_IDS` / `DISCORD_ADMIN_IDS` | Who may run management commands remotely |
 | `ETHGENT_TELEMETRY_RETENTION_DAYS` | How long logs/runs/usage are kept (default `30`, `0` = forever) |
-| `ETHGENT_SANDBOX` | Where installed pack tools run: `auto` (default), `container` or `subprocess`; see [Sandbox for installed packs](#sandbox-for-installed-packs) |
+| `ETHGENT_SANDBOX` | Where installed pack tools run: `auto` (default), `container`, `subprocess` or `remote`; see [Sandbox for installed packs](#sandbox-for-installed-packs) |
 
 > [!CAUTION]
 > All API keys and tokens live only in the gitignored `.env*` files (`.env`, `.env.local`, `.env.model`, `.env.secrets`). Never commit real credentials.
@@ -330,8 +330,9 @@ Isolation follows trust, not the number of agents. Your own tools (`/tool create
 |---|---|---|
 | `container` | `ETHGENT_SANDBOX=container`, or `auto` when Docker is reachable | A throwaway container per call: read-only filesystem except `/tmp`, an unprivileged user, all capabilities dropped, memory, CPU, process and time limits, and optionally no network. The tool file is mounted read-only; the agent's installed packages are shared read-only so a tool can `import requests`. |
 | `subprocess` | `ETHGENT_SANDBOX=subprocess`, or `auto` without Docker | A separate Python process with the same memory, CPU and time limits. It shares the host's filesystem and network, so it is weaker than a container. |
+| `remote` | `ETHGENT_SANDBOX=remote`, or `auto` when `ETHGENT_SANDBOX_URL` is set | The call goes to a sandbox service running in its own container next to the agent (below). The tool runs there as a limited subprocess: it sees neither the agent's files nor its environment, only the tool file and the variables it declared. |
 
-In both modes the tool sees **only the environment variables it declared**, never the agent's model keys, chat tokens or database keys. A pack cannot get those by declaring their names: variables the agent itself uses (model keys, `TELEGRAM_*`, `SUPABASE_*`, …) are withheld even if declared. A tool that runs past its time limit is stopped, and one that ignores that is killed.
+In every mode the tool sees **only the environment variables it declared**, never the agent's model keys, chat tokens or database keys. A pack cannot get those by declaring their names: variables the agent itself uses (model keys, `TELEGRAM_*`, `SUPABASE_*`, …) are withheld even if declared. A tool that runs past its time limit is stopped, and one that ignores that is killed.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -340,13 +341,31 @@ In both modes the tool sees **only the environment variables it declared**, neve
 | `ETHGENT_SANDBOX_CPUS` | `1` | CPU share (container mode) |
 | `ETHGENT_SANDBOX_NETWORK` | `bridge` | `none` cuts the network (container mode) |
 | `ETHGENT_SANDBOX_IMAGE` | `python:<your version>-slim` | Image for container mode |
+| `ETHGENT_SANDBOX_URL` | (empty) | Address of the sandbox service (remote mode) |
+| `ETHGENT_SANDBOX_TOKEN` | (empty) | Shared secret between the agent and the sandbox service |
 
 A tool the pack marks `requires_approval: true` is not sent to the sandbox until the host approves it; see [Approval](#approval-for-tools-that-change-something-outside).
 
 `/agent pack install <src> --trust` installs a pack's tools in the agent's process instead, with access to everything the agent can reach; use it only for packs you wrote or reviewed. `/tool show <name>` tells you where a tool runs.
 
-> [!NOTE]
-> If the agent itself runs inside a container (as in the MarketingPool Docker setup), Docker is normally not reachable from inside it, so `auto` falls back to `subprocess`. Running a separate sandbox service next to the agent for that case is not built yet.
+#### When the agent itself runs in a container
+
+A containerized agent usually cannot start containers, so `auto` would fall back to `subprocess`, next to the agent's files. Run the sandbox service beside it instead, from the same image:
+
+```yaml
+  sandbox:
+    image: <the agent's image>
+    command: python -m MarketingApp.sandbox.service
+    environment:
+      ETHGENT_SANDBOX_TOKEN: ${SANDBOX_TOKEN}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "65534:65534"
+```
+
+and give the agent `ETHGENT_SANDBOX_URL=http://sandbox:8092` and the same `ETHGENT_SANDBOX_TOKEN`. The service holds no other secret, refuses calls without the token, applies its own time and memory limits (the agent cannot raise them) and runs at most `ETHGENT_SANDBOX_MAX_CONCURRENT` calls at once. If the packs need Python packages, install them where the service can read them and put that folder on its `PYTHONPATH`. Keep the service on a network the agent can reach and your database cannot; [MarketingPool](https://github.com/Ahmet2001/MarketingPool) does exactly this.
 
 ## Operations: logs, run history, usage
 
@@ -414,7 +433,7 @@ print(result.text)
 Limits to know before you deploy:
 
 - **One process per workspace.** The worker and `EthgentAgent` serialize their own tasks, but two processes on the same workspace (for example the worker and the terminal) do not coordinate. Run more workers with separate workspaces.
-- **The pack sandbox needs Docker on the host.** A worker that itself runs in a container usually cannot start containers, so installed packs fall back to the weaker process sandbox (see [Sandbox](#sandbox-for-installed-packs)).
+- **Pack tools need a sandbox next to the worker.** A worker in a container usually cannot start containers; run the sandbox service beside it ([how](#when-the-agent-itself-runs-in-a-container)), or installed packs fall back to the weaker process sandbox.
 - **Logs and run history are local** (a SQLite file in the workspace); there is no exporter to your monitoring yet.
 
 [MarketingPool](https://github.com/Ahmet2001/MarketingPool) is a complete example: this worker, the queue, the connection workers and an application wired together with Docker Compose.

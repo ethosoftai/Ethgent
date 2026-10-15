@@ -1,6 +1,6 @@
 """Runs a tool from an installed pack outside the agent's process.
 
-Two modes, chosen by ``ETHGENT_SANDBOX`` (``auto`` by default):
+Three modes, chosen by ``ETHGENT_SANDBOX`` (``auto`` by default):
 
 * ``container``: a throwaway Docker container per call. The tool file and the runner are
   mounted read-only; the root filesystem is read-only; all capabilities are dropped; memory,
@@ -10,8 +10,13 @@ Two modes, chosen by ``ETHGENT_SANDBOX`` (``auto`` by default):
 * ``subprocess``: a separate Python process with an empty environment (again, only the
   declared variables) and the same memory/CPU/time limits. It shares the host's filesystem
   and network, so it is weaker than a container; it is the fallback when Docker is missing.
+* ``remote``: the call goes to a sandbox service (``python -m MarketingApp.sandbox.service``) at
+  ``ETHGENT_SANDBOX_URL``, which runs it as a subprocess in its own container. This is for an agent
+  that itself runs in a container and cannot start containers: the tool then runs next to the agent,
+  not in it, and sees neither the agent's files nor its environment.
 
-``auto`` uses ``container`` when Docker is reachable and ``subprocess`` otherwise.
+``auto`` uses ``remote`` when ``ETHGENT_SANDBOX_URL`` is set, ``container`` when Docker is reachable,
+and ``subprocess`` otherwise.
 """
 
 from __future__ import annotations
@@ -25,6 +30,8 @@ import sys
 import sysconfig
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from functools import lru_cache
 from pathlib import Path
@@ -32,7 +39,7 @@ from typing import Any
 
 RUNNER_PATH = Path(__file__).with_name("runner.py")
 MARKER = "ETHGENT_SANDBOX_RESULT "
-VALID_MODES = {"auto", "container", "subprocess"}
+VALID_MODES = {"auto", "container", "subprocess", "remote"}
 
 # Variables the agent itself reads. A pack may not receive these even if it declares them,
 # otherwise a pack could ask for OPENAI_API_KEY by name and get the agent's model key.
@@ -77,6 +84,8 @@ def settings() -> dict[str, Any]:
         "pids": int(os.getenv("ETHGENT_SANDBOX_PIDS") or 64),
         "share_deps": (os.getenv("ETHGENT_SANDBOX_SHARE_DEPS") or "1") != "0",
         "startup_grace": float(os.getenv("ETHGENT_SANDBOX_STARTUP_GRACE") or 20),
+        "url": (os.getenv("ETHGENT_SANDBOX_URL") or "").strip(),
+        "token": (os.getenv("ETHGENT_SANDBOX_TOKEN") or "").strip(),
     }
 
 
@@ -100,7 +109,11 @@ def resolve_mode(conf: dict[str, Any] | None = None) -> str:
     conf = conf or settings()
     if conf["mode"] == "container" and not docker_available():
         raise SandboxError("ETHGENT_SANDBOX=container but Docker is not reachable")
+    if conf["mode"] == "remote" and not conf.get("url"):
+        raise SandboxError("ETHGENT_SANDBOX=remote but ETHGENT_SANDBOX_URL is not set")
     if conf["mode"] == "auto":
+        if conf.get("url"):
+            return "remote"
         return "container" if docker_available() else "subprocess"
     return conf["mode"]
 
@@ -120,13 +133,43 @@ def tool_environment(env_names: list[str], values: dict[str, str]) -> tuple[dict
 
 
 def _dependency_paths() -> list[str]:
-    """The agent's installed packages, so a pack tool can import requests and the like."""
+    """The agent's installed packages, so a pack tool can import requests and the like.
+
+    The runner starts with ``python -I``, which ignores ``PYTHONPATH``; folders listed there (for
+    example where a deployment installs the packages its packs need) are passed on explicitly.
+    """
     paths = []
-    for key in ("purelib", "platlib"):
-        path = sysconfig.get_paths().get(key)
+    candidates = [sysconfig.get_paths().get(key) for key in ("purelib", "platlib")]
+    candidates += (os.environ.get("PYTHONPATH") or "").split(os.pathsep)
+    for path in candidates:
         if path and os.path.isdir(path) and path not in paths:
             paths.append(path)
     return paths
+
+
+def _run_remote(conf: dict[str, Any], tool_file: Path, request: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    """Send the call to the sandbox service; its answer has the same shape as a local run."""
+    body = json.dumps(
+        {**request, "source": tool_file.read_text(encoding="utf-8"), "filename": tool_file.name, "env": env}
+    ).encode("utf-8")
+    url = conf["url"].rstrip("/") + "/run"
+    headers = {"Content-Type": "application/json"}
+    if conf.get("token"):
+        headers["Authorization"] = f"Bearer {conf['token']}"
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, data=body, headers=headers, method="POST"),
+            timeout=conf["timeout"] + conf["startup_grace"],
+        ) as response:
+            answer = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        return {"ok": False, "error": f"sandbox service answered {exc.code}: {detail}"}
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise SandboxError(f"sandbox service at {conf['url']} did not answer: {exc}") from exc
+    if not isinstance(answer, dict) or "ok" not in answer:
+        return {"ok": False, "error": "sandbox service sent an answer without a result"}
+    return {key: answer[key] for key in ("ok", "result", "error", "stderr") if key in answer}
 
 
 def _parse_output(stdout: str) -> dict[str, Any] | None:
@@ -195,6 +238,11 @@ def run_tool(
         "file_mb": 64,
     }
     started = time.monotonic()
+
+    if mode == "remote":
+        request = {"function": function, "args": args, "positional": positional or [], "approved": bool(approved)}
+        outcome = _run_remote(conf, tool_file, request, env)
+        return {"mode": mode, "withheld_env": withheld, "duration_s": round(time.monotonic() - started, 3), **outcome}
 
     if mode == "container":
         name = f"ethgent-sbx-{uuid.uuid4().hex[:12]}"

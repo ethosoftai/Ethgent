@@ -809,6 +809,9 @@ Slash ile baslamayan her satir Ethgent'e mesaj olarak gonderilir.
             return
         if mode == "container":
             self._emit("  Sandbox: pack tool'lari her cagrida ayri, sinirli bir Docker container'inda calisacak.")
+        elif mode == "remote":
+            self._emit("  Sandbox: pack tool'lari ajanin yanindaki sandbox servisinde (ETHGENT_SANDBOX_URL), ajanin "
+                       "dosyalarini ve anahtarlarini gormeden calisacak.")
         else:
             self._emit(self._color(
                 "  Sandbox: Docker yok; pack tool'lari ayri bir process'te, anahtarsiz ama ayni dosya sistemi "
