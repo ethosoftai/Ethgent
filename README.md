@@ -414,7 +414,7 @@ Management commands are `/agent`, `/tool`, `/heartbeat`, `/usage`, … on Telegr
 
 ## Running inside your backend
 
-The terminal is one way to run Ethgent. The other is headless, next to your own services, with no one at a keyboard. There are three entry points, and all of them use the same orchestrator, sub-agents and tools:
+The terminal is one way to run Ethgent. The other is headless, next to your own services, with no one at a keyboard. There are three entry points, and all of them use the same orchestrator, sub-agents and tools. **Step-by-step guide, with a Compose file, the queue table, approvals, secrets and limits: [docs/backend.md](docs/backend.md).**
 
 | Entry point | How a task arrives | Approval comes from |
 |---|---|---|
@@ -489,6 +489,8 @@ MarketingApp/
 ├── llms/                  # BaseModel orchestrator, Agent Studio, SubModels/
 ├── legacy/panel/          # Archived FastAPI web panel (superseded by the terminal interface)
 └── workspace/              # Runtime data: memory, drafts, assets, custom tools, agent packs
+docs/backend.md              # Running the agent inside your backend
+Dockerfile                   # The worker image (also runs the sandbox service)
 migrations/                  # SQL for the agent_jobs queue table the worker reads
 tests/                       # unittest suite (isolated temp workspace)
 ```

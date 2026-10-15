@@ -1,0 +1,15 @@
+**/__pycache__
+**/.venv
+**/.env
+**/.env.*
+.git
+public
+# runtime data of a local run, never baked into an image (the tracked example files under workspace/ are kept)
+MarketingApp/workspace/chrome_profile
+MarketingApp/workspace/browser_debug_profile
+MarketingApp/workspace/cookies
+MarketingApp/workspace/runtime
+MarketingApp/workspace/exports
+MarketingApp/workspace/konusma_gecmisi.json
+MarketingApp/workspace/.system/terminal_chat_history.json
+MarketingApp/workspace/social
