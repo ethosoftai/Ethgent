@@ -343,6 +343,8 @@ In every mode the tool sees **only the environment variables it declared**, neve
 | `ETHGENT_SANDBOX_IMAGE` | `python:<your version>-slim` | Image for container mode |
 | `ETHGENT_SANDBOX_URL` | (empty) | Address of the sandbox service (remote mode) |
 | `ETHGENT_SANDBOX_TOKEN` | (empty) | Shared secret between the agent and the sandbox service |
+| `ETHGENT_SANDBOX_SHARED_ENV` | (empty) | Comma-separated variable names every sandboxed tool receives from the process that runs it (the agent, or the sandbox service), e.g. `STUDIO_FILE_ROOTS` so workflow tools can read an inbox folder. Reserved names are never passed. |
+| `ETHGENT_SANDBOX_READ_DIRS` | (empty) | Folders mounted read-only at the same path in container mode, separated by `:` |
 
 A tool the pack marks `requires_approval: true` is not sent to the sandbox until the host approves it; see [Approval](#approval-for-tools-that-change-something-outside).
 
@@ -365,7 +367,7 @@ A containerized agent usually cannot start containers, so `auto` would fall back
     user: "65534:65534"
 ```
 
-and give the agent `ETHGENT_SANDBOX_URL=http://sandbox:8092` and the same `ETHGENT_SANDBOX_TOKEN`. The service holds no other secret, refuses calls without the token, applies its own time and memory limits (the agent cannot raise them) and runs at most `ETHGENT_SANDBOX_MAX_CONCURRENT` calls at once. If the packs need Python packages, install them where the service can read them and put that folder on its `PYTHONPATH`. Keep the service on a network the agent can reach and your database cannot; [MarketingPool](https://github.com/Ahmet2001/MarketingPool) does exactly this.
+and give the agent `ETHGENT_SANDBOX_URL=http://sandbox:8092` and the same `ETHGENT_SANDBOX_TOKEN`. The service holds no other secret, refuses calls without the token, applies its own time and memory limits (the agent cannot raise them) and runs at most `ETHGENT_SANDBOX_MAX_CONCURRENT` calls at once. If the packs need Python packages, install them where the service can read them and put that folder on its `PYTHONPATH`. If tools should read files the agent received, mount that folder read-only into the service and name the variable that points to it in `ETHGENT_SANDBOX_SHARED_ENV`. Keep the service on a network the agent can reach and your database cannot; [MarketingPool](https://github.com/Ahmet2001/MarketingPool) does exactly this.
 
 ## Operations: logs, run history, usage
 

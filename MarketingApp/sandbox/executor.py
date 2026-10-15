@@ -69,6 +69,10 @@ def is_reserved_env_name(name: str) -> bool:
     return name in RESERVED_ENV_NAMES or name.startswith(RESERVED_ENV_PREFIXES)
 
 
+def _names(value: str | None) -> list[str]:
+    return [name.strip() for name in (value or "").replace(";", ",").split(",") if name.strip()]
+
+
 def settings() -> dict[str, Any]:
     mode = (os.getenv("ETHGENT_SANDBOX") or "auto").strip().lower()
     if mode not in VALID_MODES:
@@ -85,6 +89,8 @@ def settings() -> dict[str, Any]:
         "share_deps": (os.getenv("ETHGENT_SANDBOX_SHARE_DEPS") or "1") != "0",
         "startup_grace": float(os.getenv("ETHGENT_SANDBOX_STARTUP_GRACE") or 20),
         "url": (os.getenv("ETHGENT_SANDBOX_URL") or "").strip(),
+        "shared_env": _names(os.getenv("ETHGENT_SANDBOX_SHARED_ENV")),
+        "read_dirs": [d for d in (os.getenv("ETHGENT_SANDBOX_READ_DIRS") or "").split(os.pathsep) if d.strip()],
         "token": (os.getenv("ETHGENT_SANDBOX_TOKEN") or "").strip(),
     }
 
@@ -118,8 +124,15 @@ def resolve_mode(conf: dict[str, Any] | None = None) -> str:
     return conf["mode"]
 
 
-def tool_environment(env_names: list[str], values: dict[str, str]) -> tuple[dict[str, str], list[str]]:
-    """Only the declared, non-reserved names, with values from ``values`` or the process env."""
+def tool_environment(
+    env_names: list[str], values: dict[str, str], shared: list[str] | None = None
+) -> tuple[dict[str, str], list[str]]:
+    """Only the declared, non-reserved names, with values from ``values`` or the process env.
+
+    ``shared`` are names the operator gives every sandboxed tool (``ETHGENT_SANDBOX_SHARED_ENV``),
+    for example ``STUDIO_FILE_ROOTS``; their values come from this process. Reserved names are
+    withheld there too.
+    """
     env: dict[str, str] = {}
     withheld: list[str] = []
     for name in env_names or []:
@@ -129,6 +142,11 @@ def tool_environment(env_names: list[str], values: dict[str, str]) -> tuple[dict
         value = values.get(name, os.environ.get(name))
         if value:
             env[name] = value
+    for name in shared or []:
+        if name in env or is_reserved_env_name(name):
+            continue
+        if os.environ.get(name):
+            env[name] = os.environ[name]
     return env, withheld
 
 
@@ -195,6 +213,9 @@ def _container_command(conf: dict[str, Any], name: str, tool_file: Path, env: di
         "-v", f"{tool_file.resolve()}:/tool/{tool_file.name}:ro",
         "-v", f"{RUNNER_PATH.resolve()}:/runner/runner.py:ro",
     ]
+    for folder in conf.get("read_dirs") or []:  # folders the operator lets tools read, at the same path
+        if os.path.isdir(folder):
+            cmd += ["-v", f"{os.path.abspath(folder)}:{os.path.abspath(folder)}:ro"]
     inner_paths: list[str] = []
     image_version = conf["image"].split(":", 1)[-1]
     host_version = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -230,7 +251,7 @@ def run_tool(
     tool_file = Path(tool_file)
     if not tool_file.is_file():
         raise SandboxError(f"{tool_file} not found")
-    env, withheld = tool_environment(list(env_names or []), dict(env_values or {}))
+    env, withheld = tool_environment(list(env_names or []), dict(env_values or {}), conf.get("shared_env"))
     limits = {
         "memory_mb": conf["memory_mb"],
         "cpu_seconds": max(1, int(conf["timeout"])),

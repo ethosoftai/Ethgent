@@ -184,6 +184,38 @@ class ApprovalTests(_Service, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls, 1)
 
 
+class SharedEnvTests(unittest.TestCase):
+    """The operator can give every sandboxed tool a few variables, e.g. the folders it may read."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp(dir=ROOT))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.folder, ignore_errors=True))
+        self.tool = self.folder / "tools_demo.py"
+        self.tool.write_text(TOOL, encoding="utf-8")
+
+    def run_env(self, name, shared):
+        conf = {**executor.settings(), "mode": "subprocess", "timeout": 10.0, "shared_env": shared}
+        return executor.run_tool(self.tool, "env_seen", {"name": name}, [], {}, conf=conf)
+
+    def test_shared_names_reach_every_tool_but_reserved_ones_never(self):
+        with mock.patch.dict(os.environ, {"STUDIO_FILE_ROOTS": "/data/inbox", "SUPABASE_SECRET_KEY": "db"}):
+            self.assertEqual(self.run_env("STUDIO_FILE_ROOTS", ["STUDIO_FILE_ROOTS"])["result"], "/data/inbox")
+            self.assertIsNone(self.run_env("SUPABASE_SECRET_KEY", ["SUPABASE_SECRET_KEY"])["result"])
+            self.assertIsNone(self.run_env("STUDIO_FILE_ROOTS", [])["result"])
+
+    def test_settings_read_the_lists(self):
+        with mock.patch.dict(os.environ, {"ETHGENT_SANDBOX_SHARED_ENV": "A, B;C", "ETHGENT_SANDBOX_READ_DIRS": os.pathsep.join(["/x", "/y"])}):
+            conf = executor.settings()
+        self.assertEqual(conf["shared_env"], ["A", "B", "C"])
+        self.assertEqual(conf["read_dirs"], ["/x", "/y"])
+
+    def test_container_mounts_read_dirs_read_only_at_the_same_path(self):
+        conf = {**executor.settings(), "read_dirs": [str(self.folder), "/does/not/exist"], "share_deps": False}
+        cmd, _ = executor._container_command(conf, "n", self.tool, {})
+        self.assertIn(f"{self.folder}:{self.folder}:ro", cmd)
+        self.assertNotIn("/does/not/exist:/does/not/exist:ro", cmd)
+
+
 class DependencyPathTests(unittest.TestCase):
     def test_pythonpath_folders_reach_the_runner(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as folder:
