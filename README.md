@@ -34,6 +34,29 @@
 - **Social media by default, any domain by design.** It ships tuned for **social media and content** (X, Instagram, YouTube, image and video content, browser automation, research), but that is a configuration, not a limit. See [Make it your own](#make-it-your-own).
 - **Runs inside your backend too.** The same agent runs headless as a queue worker, an MCP endpoint or a library in your Python code ([Running inside your backend](#running-inside-your-backend)).
 
+## Where it fits
+
+Ethgent is one of four parts of one idea: fit an LLM agent to a system. Each part works without the others.
+
+| Part | Role |
+| --- | --- |
+| **Ethgent** (this repository) | The customisable agent: an orchestrator, sub-agents and tools that live in YAML and packs. Runs as a terminal app or as a worker inside your backend. |
+| [**Marketing Agent Assets**](https://github.com/Ahmet2001/MarketingPool/tree/main/marketing-agent-assets) | The connection to a system, and an open pool: workers that hold credentials, platform toolboxes, the `asset-pool` contract an app implements, schemas and guides. |
+| [**MarketingStudio**](https://github.com/Ahmet2001/MarketingStudio) | The workflow factory: build a workflow once and export it as an agent pack (installed here), a queue worker, a job handler or an MCP server. |
+| [**MarketingPool**](https://github.com/Ahmet2001/MarketingPool) | The worked example: this agent (as a submodule), the assets and a sandbox running together with Docker Compose. |
+
+```mermaid
+flowchart LR
+    S[MarketingStudio<br/>factory] -->|agent packs| E
+    S -->|workers, job handlers| A
+    subgraph Pool[MarketingPool: the example]
+        E[Ethgent<br/>agent] <-->|requests, results| A[Marketing Agent Assets<br/>workers, connectors, contracts]
+    end
+    A <-->|data in, content out| Y([Your system or app])
+```
+
+The agent decides; the assets connect it and hold the keys; the factory turns processes you already know into tools for both. The reasoning is in the [manifesto](https://github.com/Ahmet2001/MarketingPool/blob/main/manifesto.md) and the [paper](https://ethosoft.org/papers/Ethgent/).
+
 ## Features
 
 | | |
